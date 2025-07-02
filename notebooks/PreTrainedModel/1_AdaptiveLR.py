@@ -56,13 +56,13 @@ def get_config() -> Dict[str, Any]:
 
         # Iperparametri di addestramento
         "NUM_EPOCHS": 40,
-        "BATCH_SIZE": 2,
+        "BATCH_SIZE": 3,
         "LEARNING_RATE": 1e-4,
         "NUM_CLASSES": 9,
         "IGNORE_INDEX": 0, # Indice della classe da ignorare nella loss (es. background)
 
         # Parametri del dataset
-        "OUTPUT_SIZE": (512, 896), # Altezza, Larghezza 
+        "OUTPUT_SIZE": (544, 1024), # Altezza, Larghezza 
         "DATASET_MEAN": [0.4278, 0.4464, 0.4231],
         "DATASET_STD": [0.2543, 0.2535, 0.2567],
         "VALIDATION_SPLIT": 0.2,
