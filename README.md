@@ -6,15 +6,15 @@ This repository contains the implementation of a lightweight semantic segmentati
 
 The goal is to classify each pixel of an image (acquired by an onboard RGB camera) into one of the following 8 semantic classes:
 
-* `0` – Sky
-* `1` – Rough trail
-* `2` – Smooth trail
-* `3` – Traversable grass
-* `4` – High vegetation
-* `5` – Non-traversable low vegetation
-* `6` – Puddle
-* `7` – Obstacle
-* `8` – Background
+* `0` – class 0
+* `1` – class 1
+* `2` – class 2
+* `3` – class 3
+* `4` – class 4
+* `5` – class 5
+* `6` – class 6
+* `7` – class 7
+* `8` – class 8
 
 ### Model Architecture
 
