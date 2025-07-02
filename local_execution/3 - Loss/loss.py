@@ -29,6 +29,8 @@ import segmentation_models_pytorch as smp
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 
+from segmentation_models_pytorch.losses import DiceLoss
+
 # =============================================================================
 # 2. CONFIGURAZIONE
 # =============================================================================
@@ -218,7 +220,7 @@ def calculate_iou_per_class(preds_np: np.ndarray, labels_np: np.ndarray, num_cla
 # 6. FUNZIONI DI TRAINING E VALIDAZIONE
 # =============================================================================
 def train_one_epoch(model: nn.Module, loader: DataLoader, optimizer: optim.Optimizer,
-                    criterion: nn.Module, scaler: GradScaler, device: torch.device, use_amp: bool) -> float:
+                    criterion_ce: nn.Module, criterion_dice:nn.Module, scaler: GradScaler, device: torch.device, use_amp: bool) -> float:
     """Esegue un'epoca di training con AMP e restituisce la loss media."""
     model.train()
     running_loss = 0.0
@@ -230,9 +232,9 @@ def train_one_epoch(model: nn.Module, loader: DataLoader, optimizer: optim.Optim
         
         optimizer.zero_grad(set_to_none=True)
         
-        with autocast(enabled=use_amp):
+        with torch.amp.autocast(enabled=use_amp):
             outputs = model(images)
-            loss = criterion(outputs, masks)
+            loss = 0.5 * criterion_ce(outputs, masks) + 0.5 * criterion_dice(outputs, masks)
         
         scaler.scale(loss).backward()
         scaler.step(optimizer)
@@ -310,21 +312,33 @@ def main():
         in_channels=3, classes=config["NUM_CLASSES"]
     ).to(device)
     
+    
     print(f"Modello smp.Unet con encoder '{config['ENCODER']}' istanziato.")
     print(f"Parametri addestrabili: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
 
     class_weights = calculate_loss_weights(pixel_counts, device)
-    criterion = nn.CrossEntropyLoss(weight=class_weights)
+    # Mantieni la tua criterion CE pesata
+    criterion_ce = nn.CrossEntropyLoss(weight=class_weights)
+    # Crea una DiceLoss
+    criterion_dice = DiceLoss(mode='multiclass')
     optimizer = optim.Adam(model.parameters(), lr=config["LEARNING_RATE"])
-    scaler = GradScaler(enabled=use_amp)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, 
+        mode='max',      # Riduci quando la metrica smette di AUMENTARE
+        factor=0.1,      # Riduci LR del 90% (1 * 0.1)
+        patience=3,      # Aspetta 3 epoche senza miglioramenti prima di ridurre
+        verbose=True     # Stampa un messaggio quando riduce il LR
+    )
+    scaler = torch.amp.GradScaler(enabled=use_amp)
 
     best_val_miou = -1.0
     print("\n--- Inizio Addestramento Ottimizzato ---")
     for epoch in range(config["NUM_EPOCHS"]):
         print(f"\n--- Epoch {epoch+1}/{config['NUM_EPOCHS']} ---")
         
-        train_loss = train_one_epoch(model, train_loader, optimizer, criterion, scaler, device, use_amp)
-        val_loss, val_miou, val_iou_per_class = evaluate(model, val_loader, criterion, device, config["NUM_CLASSES"])
+        train_loss = train_one_epoch(model, train_loader, optimizer, criterion_ce, criterion_dice, scaler, device, use_amp)
+        val_loss, val_miou, val_iou_per_class = evaluate(model, val_loader, criterion_ce, device, criterion_dice, config["NUM_CLASSES"])
+        scheduler.step(val_miou)  # Riduci LR se mIoU non migliora
         
         print(f"Risultati Epoch {epoch+1}:")
         print(f"  - Training Loss: {train_loss:.4f} | Validation Loss: {val_loss:.4f} | Validation mIoU: {val_miou:.4f}")
@@ -343,170 +357,3 @@ def main():
 if __name__ == "__main__":
     main()
 
-
-'''
-PS D:\MLPoject-Git\autoencoder-onboard-segmentation> & "C:/Program Files/Python312/python.exe" "d:/MLPoject-Git/autoencoder-onboard-segmentation/local_execution/3 - Loss/loss.py"
-Traceback (most recent call last):
-  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\3 - Loss\loss.py", line 29, in <module>
-    import albumentations as A
-ModuleNotFoundError: No module named 'albumentations'
-PS D:\MLPoject-Git\autoencoder-onboard-segmentation> & "C:/Program Files/Python312/python.exe" "d:/MLPoject-Git/autoencoder-onboard-segmentation/local_execution/3 - Loss/loss.py"
-Device in uso: cuda | Automatic Mixed Precision: Abilitata
-Avvio analisi del dataset e preparazione dello split...
-Traceback (most recent call last):
-  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\3 - Loss\loss.py", line 344, in <module>
-    main()
-  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\3 - Loss\loss.py", line 290, in main
-    train_dirs, val_dirs, pixel_counts = analyze_and_split_dataset(config)
-                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\3 - Loss\loss.py", line 138, in analyze_and_split_dataset
-    os.path.join(dataset_path, d) for d in os.listdir(dataset_path)
-                                           ^^^^^^^^^^^^^^^^^^^^^^^^
-FileNotFoundError: [WinError 3] The system cannot find the path specified: '../../dataset/training/train'
-PS D:\MLPoject-Git\autoencoder-onboard-segmentation> & "C:/Program Files/Python312/python.exe" "d:/MLPoject-Git/autoencoder-onboard-segmentation/local_execution/3 - Loss/loss.py"
-Device in uso: cuda | Automatic Mixed Precision: Abilitata
-Avvio analisi del dataset e preparazione dello split...
-Trovati 931 campioni.
-Analisi campioni: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████| 931/931 [00:07<00:00, 132.41it/s] 
-Stratificazione basata su 893 campioni con classi rare.
-Split stratificato eseguito con successo.
-Split creato: 744 train, 187 validation.
-C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\albumentations\core\validation.py:114: UserWarning: ShiftScaleRotate is a special case of Affine transform. Please use Affine transform instead.
-  original_init(self, **validated_kwargs)
-Modello smp.Unet con encoder 'resnet34' istanziato.
-Parametri addestrabili: 24,437,529
-Pesi calcolati per la loss (normalizzati):
-  - Classe 0: 0.42
-  - Classe 1: 0.08
-  - Classe 2: 0.09
-  - Classe 3: 0.08
-  - Classe 4: 6.58
-  - Classe 5: 1.40
-  - Classe 6: 0.19
-  - Classe 7: 0.03
-  - Classe 8: 0.12
-d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\3 - Loss\loss.py:319: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
-  scaler = GradScaler(enabled=use_amp)
-
---- Inizio Addestramento Ottimizzato ---
-
---- Epoch 1/15 ---
-Training:   0%|                                                                                                                         | 0/93 [00:00<?, ?it/s]d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\3 - Loss\loss.py:233: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
-  with autocast(enabled=use_amp):
-Training: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████| 93/93 [00:48<00:00,  1.91it/s, loss=1.4241]
-Validation: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 24/24 [00:14<00:00,  1.68it/s] 
-Risultati Epoch 1:
-  - Training Loss: 1.5730 | Validation Loss: 1.4519 | Validation mIoU: 0.2554
-
->>> Nuovo modello migliore salvato in './best_model_albumentations.pth' con mIoU: 0.2554 <<<
-
-
---- Epoch 2/15 ---
-Training: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████| 93/93 [00:36<00:00,  2.53it/s, loss=1.3567] 
-Validation: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 24/24 [00:14<00:00,  1.70it/s] 
-Risultati Epoch 2:
-  - Training Loss: 1.1803 | Validation Loss: 1.2623 | Validation mIoU: 0.3013
-
->>> Nuovo modello migliore salvato in './best_model_albumentations.pth' con mIoU: 0.3013 <<<
-
-
---- Epoch 3/15 ---
-Training: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████| 93/93 [00:37<00:00,  2.51it/s, loss=0.8869] 
-Validation: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 24/24 [00:14<00:00,  1.70it/s] 
-Risultati Epoch 3:
-  - Training Loss: 1.0360 | Validation Loss: 1.2083 | Validation mIoU: 0.3251
-
->>> Nuovo modello migliore salvato in './best_model_albumentations.pth' con mIoU: 0.3251 <<<
-
-
---- Epoch 4/15 ---
-Training: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████| 93/93 [00:37<00:00,  2.50it/s, loss=1.0443] 
-Validation: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 24/24 [00:14<00:00,  1.67it/s] 
-Risultati Epoch 4:
-  - Training Loss: 0.9551 | Validation Loss: 1.0805 | Validation mIoU: 0.3355
-
->>> Nuovo modello migliore salvato in './best_model_albumentations.pth' con mIoU: 0.3355 <<<
-
-
---- Epoch 5/15 ---
-Training: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████| 93/93 [00:37<00:00,  2.49it/s, loss=1.3384] 
-Validation: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 24/24 [00:14<00:00,  1.68it/s] 
-Risultati Epoch 5:
-  - Training Loss: 0.9003 | Validation Loss: 1.0518 | Validation mIoU: 0.3513
-
->>> Nuovo modello migliore salvato in './best_model_albumentations.pth' con mIoU: 0.3513 <<<
-
-
---- Epoch 6/15 ---
-Training: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████| 93/93 [00:37<00:00,  2.49it/s, loss=1.1241] 
-Validation: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 24/24 [00:14<00:00,  1.67it/s] 
-Risultati Epoch 6:
-  - Training Loss: 0.8346 | Validation Loss: 1.0077 | Validation mIoU: 0.3420
-
---- Epoch 7/15 ---
-Training: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████| 93/93 [00:37<00:00,  2.48it/s, loss=0.4592] 
-Validation: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 24/24 [00:14<00:00,  1.71it/s] 
-Risultati Epoch 7:
-  - Training Loss: 0.7661 | Validation Loss: 0.9914 | Validation mIoU: 0.3639
-
->>> Nuovo modello migliore salvato in './best_model_albumentations.pth' con mIoU: 0.3639 <<<
-
-
---- Epoch 8/15 ---
-Training: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████| 93/93 [00:37<00:00,  2.49it/s, loss=0.6796] 
-Validation: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 24/24 [00:14<00:00,  1.69it/s] 
-Risultati Epoch 8:
-  - Training Loss: 0.7788 | Validation Loss: 1.0040 | Validation mIoU: 0.3460
-
---- Epoch 9/15 ---
-Training: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████| 93/93 [00:37<00:00,  2.48it/s, loss=0.6700] 
-Validation: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 24/24 [00:14<00:00,  1.68it/s] 
-Risultati Epoch 9:
-  - Training Loss: 0.7473 | Validation Loss: 1.0974 | Validation mIoU: 0.3386
-
---- Epoch 10/15 ---
-Training: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████| 93/93 [00:37<00:00,  2.48it/s, loss=0.6455] 
-Validation: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 24/24 [00:14<00:00,  1.68it/s] 
-Risultati Epoch 10:
-  - Training Loss: 0.7467 | Validation Loss: 0.9603 | Validation mIoU: 0.3482
-
---- Epoch 11/15 ---
-Training: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████| 93/93 [00:37<00:00,  2.48it/s, loss=0.5073] 
-Validation: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 24/24 [00:14<00:00,  1.69it/s] 
-Risultati Epoch 11:
-  - Training Loss: 0.6766 | Validation Loss: 0.9440 | Validation mIoU: 0.3667
-
->>> Nuovo modello migliore salvato in './best_model_albumentations.pth' con mIoU: 0.3667 <<<
-
-
---- Epoch 12/15 ---
-Training: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████| 93/93 [00:37<00:00,  2.48it/s, loss=0.9332] 
-Validation: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 24/24 [00:14<00:00,  1.64it/s] 
-Risultati Epoch 12:
-  - Training Loss: 0.6661 | Validation Loss: 1.1044 | Validation mIoU: 0.3389
-
---- Epoch 13/15 ---
-Training: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████| 93/93 [00:37<00:00,  2.48it/s, loss=0.5807] 
-Validation: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 24/24 [00:14<00:00,  1.68it/s] 
-Risultati Epoch 13:
-  - Training Loss: 0.7512 | Validation Loss: 0.9652 | Validation mIoU: 0.3467
-
---- Epoch 14/15 ---
-Training: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████| 93/93 [00:37<00:00,  2.48it/s, loss=0.7401] 
-Validation: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 24/24 [00:14<00:00,  1.69it/s] 
-Risultati Epoch 14:
-  - Training Loss: 0.6822 | Validation Loss: 0.9177 | Validation mIoU: 0.3633
-
---- Epoch 15/15 ---
-Training: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████| 93/93 [00:37<00:00,  2.48it/s, loss=0.4712] 
-Validation: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 24/24 [00:14<00:00,  1.66it/s] 
-Risultati Epoch 15:
-  - Training Loss: 0.6169 | Validation Loss: 0.9272 | Validation mIoU: 0.3727
-
->>> Nuovo modello migliore salvato in './best_model_albumentations.pth' con mIoU: 0.3727 <<<
-
-
---- Addestramento Completato ---
-Miglior mIoU di validazione: 0.3727
-
-'''
