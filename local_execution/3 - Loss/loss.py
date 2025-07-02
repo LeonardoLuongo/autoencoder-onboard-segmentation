@@ -1,14 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 Script per l'addestramento di un modello di segmentazione semantica (U-Net)
-utilizzando un approccio con loss pesata (Weighted Cross-Entropy) per gestire
-lo sbilanciamento delle classi.
-
-OTTIMIZZAZIONI INCLUSE:
-1. Ridimensionamento delle immagini per evitare colli di bottiglia I/O e di calcolo.
-2. Utilizzo di Automatic Mixed Precision (AMP) per un training più veloce su GPU moderne.
-3. Calcolo delle metriche di validazione ottimizzato.
-4. Predisposizione per torch.compile (PyTorch 2.x).
+con le seguenti caratteristiche:
+- Data augmentation tramite Albumentations.
+- Loss pesata (Weighted Cross-Entropy) per gestire lo sbilanciamento delle classi.
+- Split stratificato del dataset basato sulla presenza di classi rare.
+- Ottimizzato per alte performance tramite Automatic Mixed Precision (AMP).
 """
 
 # =============================================================================
@@ -22,9 +19,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
-# --- MODIFICA ---: Import aggiuntivi per trasformazioni e AMP
-from torchvision import transforms
-import torchvision.transforms.functional as TF
 from torch.cuda.amp import GradScaler, autocast
 
 import numpy as np
@@ -32,6 +26,8 @@ from PIL import Image
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 import segmentation_models_pytorch as smp
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
 
 # =============================================================================
 # 2. CONFIGURAZIONE
@@ -44,136 +40,163 @@ def get_config() -> Dict[str, Any]:
         from google.colab import drive
         drive.mount('/content/drive')
         base_path = "/content/drive/MyDrive/ML_Project/"
+    else:
+        # Assicurati che il percorso relativo sia corretto
+        base_path = "./" 
 
     config = {
         "DEVICE": torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
         
+        # Percorsi
         "DATASET_PATH": os.path.join(base_path, "dataset/training/train"),
-        "MODEL_SAVE_PATH": os.path.join(base_path, "best_model_optimized.pth"),
+        "MODEL_SAVE_PATH": os.path.join(base_path, "best_model_albumentations.pth"),
 
-        "NUM_EPOCHS": 10,
+        # Iperparametri di addestramento
+        "NUM_EPOCHS": 15,
         "BATCH_SIZE": 8,
         "LEARNING_RATE": 1e-4,
 
-        # --- MODIFICA ---: Aggiunti parametri per il ridimensionamento e AMP
-        "OUTPUT_SIZE": (512, 1024), # (Altezza, Larghezza) -> Cruciale per la velocità!
-        "USE_AMP": True, # Abilita Automatic Mixed Precision
-
+        # Parametri del dataset, split e augmentation
+        "OUTPUT_SIZE": (544, 1024), # (Altezza, Larghezza) -> Cruciale per la velocità
         "NUM_CLASSES": 9,
         "VALIDATION_SPLIT": 0.2,
         "RANDOM_SEED": 42,
-        "NUM_WORKERS_TRAIN": 2, 
+        "CLASSI_RARE_INDICI": [4, 5, 6, 8],
+
+        # Parametri di performance
+        "USE_AMP": True, # Abilita Automatic Mixed Precision
+        "NUM_WORKERS_TRAIN": 2, # Aumenta se la CPU lo permette, 0 su Windows se dà problemi
         "NUM_WORKERS_VAL": 1,
 
+        # Parametri del modello
         "ENCODER": "resnet34",
         "ENCODER_WEIGHTS": "imagenet",
-        
-        "CLASSI_RARE_INDICI": [4, 5, 6, 8],
     }
     return config
 
 # =============================================================================
-# 3. CLASSE DATASET (MODIFICATA)
+# 3. DATA AUGMENTATION
+# =============================================================================
+def get_train_transforms(output_size: Tuple[int, int]) -> A.Compose:
+    """Restituisce la pipeline di augmentation per il training set."""
+    return A.Compose([
+        A.Resize(height=output_size[0], width=output_size[1]),
+        A.HorizontalFlip(p=0.5),
+        A.ShiftScaleRotate(shift_limit=0.0625, scale_limit=0.1, rotate_limit=15, p=0.5),
+        A.RandomBrightnessContrast(p=0.3),
+        A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
+        ToTensorV2(),
+    ])
+
+def get_val_transforms(output_size: Tuple[int, int]) -> A.Compose:
+    """Restituisce la pipeline di trasformazioni per il validation set."""
+    return A.Compose([
+        A.Resize(height=output_size[0], width=output_size[1]),
+        A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
+        ToTensorV2(),
+    ])
+
+# =============================================================================
+# 4. CLASSE DATASET
 # =============================================================================
 class SegmentationDataset(Dataset):
-    """
-    Dataset ottimizzato: carica, ridimensiona e converte immagini e maschere.
-    """
-    def __init__(self, sample_dirs: List[str], output_size: Tuple[int, int]):
-        """
-        Args:
-            sample_dirs (List[str]): Lista dei percorsi alle cartelle dei campioni.
-            output_size (Tuple[int, int]): Dimensione di output (H, W) per immagini e maschere.
-        """
+    """Dataset per la segmentazione che utilizza Albumentations."""
+    def __init__(self, sample_dirs: List[str], transform: A.Compose):
         self.sample_dirs = sample_dirs
-        self.output_size = output_size
-        # --- MODIFICA ---: Usiamo TF.to_tensor che normalizza a [0, 1] e permuta le dimensioni
-        # La normalizzazione con media/std può essere aggiunta qui se necessario
-        self.image_transform = transforms.ToTensor()
+        self.transform = transform
 
     def __len__(self) -> int:
         return len(self.sample_dirs)
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         sample_dir = self.sample_dirs[idx]
-
         img_path = os.path.join(sample_dir, 'rgb.jpg')
         mask_path = os.path.join(sample_dir, 'labels.png')
 
-        image = Image.open(img_path).convert("RGB")
-        mask = Image.open(mask_path)
+        # Carica come array NumPy, richiesto da Albumentations
+        image = np.array(Image.open(img_path).convert("RGB"))
+        mask = np.array(Image.open(mask_path))
 
-        # --- MODIFICA ---: Ridimensionamento, la parte più importante per la performance
-        image = TF.resize(image, self.output_size, interpolation=TF.InterpolationMode.BILINEAR)
-        # Per le maschere, usare NEAREST per non creare valori di classe intermedi
-        mask = TF.resize(mask, self.output_size, interpolation=TF.InterpolationMode.NEAREST)
-
-        # Converte in tensori
-        image_tensor = self.image_transform(image)
-        mask_tensor = torch.from_numpy(np.array(mask, dtype=np.int64))
+        augmented = self.transform(image=image, mask=mask)
+        image = augmented['image']
+        mask = augmented['mask']
         
-        return image_tensor, mask_tensor
+        # ToTensorV2 si occupa della conversione, ma assicuriamoci dei tipi
+        return image.float(), mask.long()
 
 # =============================================================================
-# 4. FUNZIONI HELPER (con piccole modifiche)
+# 5. FUNZIONI HELPER
 # =============================================================================
-# La funzione analyze_and_split_dataset rimane quasi invariata
-
 def analyze_and_split_dataset(
-    dataset_path: str, 
-    val_size: float, 
-    random_state: int,
-    rare_class_indices: List[int]
+    config: Dict[str, Any]
 ) -> Tuple[List[str], List[str], np.ndarray]:
-    """Analizza il dataset, calcola la distribuzione dei pixel e esegue uno split stratificato."""
-    # (Codice identico a prima, lo ometto per brevità ma va incluso qui)
+    """Analizza il dataset, calcola la distribuzione dei pixel e esegue lo split stratificato."""
+    dataset_path = config["DATASET_PATH"]
     print("Avvio analisi del dataset e preparazione dello split...")
+    
     all_dirs = sorted([
         os.path.join(dataset_path, d) for d in os.listdir(dataset_path) 
         if os.path.isdir(os.path.join(dataset_path, d)) and d.isdigit()
     ])
-    if not all_dirs: raise FileNotFoundError(f"Nessun campione valido trovato in '{dataset_path}'")
+    if not all_dirs:
+        raise FileNotFoundError(f"Nessun campione valido trovato in '{dataset_path}'")
+    
     print(f"Trovati {len(all_dirs)} campioni.")
-    num_classes = get_config()["NUM_CLASSES"]
-    pixel_counts = np.zeros(num_classes, dtype=np.int64)
+    pixel_counts = np.zeros(config["NUM_CLASSES"], dtype=np.int64)
     stratify_metadata, valid_sample_dirs = [], []
+
     for sample_dir in tqdm(all_dirs, desc="Analisi campioni"):
         mask_path = os.path.join(sample_dir, 'labels.png')
-        if not os.path.exists(mask_path): continue
+        if not os.path.exists(mask_path):
+            continue
         try:
             mask_np = np.array(Image.open(mask_path), dtype=np.uint8)
-            pixel_counts += np.bincount(mask_np.flatten(), minlength=num_classes)
+            pixel_counts += np.bincount(mask_np.flatten(), minlength=config["NUM_CLASSES"])
+            
             classes_present = np.unique(mask_np)
-            stratify_vector = np.zeros(num_classes, dtype=np.int8)
+            stratify_vector = np.zeros(config["NUM_CLASSES"], dtype=np.int8)
             stratify_vector[classes_present] = 1
             stratify_metadata.append(stratify_vector)
             valid_sample_dirs.append(sample_dir)
         except Exception as e:
-            print(f"Errore in {sample_dir}: {e}. Campione saltato.")
-    stratify_labels = [1 if any(vec[i] == 1 for i in rare_class_indices) else 0 for vec in stratify_metadata]
+            print(f"Errore nell'elaborazione di {sample_dir}: {e}. Campione saltato.")
+
+    # Strategia di stratificazione semplificata
+    stratify_labels = [
+        1 if any(vec[i] == 1 for i in config["CLASSI_RARE_INDICI"]) else 0 
+        for vec in stratify_metadata
+    ]
     print(f"Stratificazione basata su {sum(stratify_labels)} campioni con classi rare.")
+
     try:
-        train_dirs, val_dirs = train_test_split(valid_sample_dirs, test_size=val_size, random_state=random_state, stratify=stratify_labels)
-        print("Split stratificato eseguito.")
+        train_dirs, val_dirs = train_test_split(
+            valid_sample_dirs, test_size=config["VALIDATION_SPLIT"],
+            random_state=config["RANDOM_SEED"], stratify=stratify_labels
+        )
+        print("Split stratificato eseguito con successo.")
     except ValueError:
         print("ERRORE: Split stratificato fallito. Eseguo uno split casuale.")
-        train_dirs, val_dirs = train_test_split(valid_sample_dirs, test_size=val_size, random_state=random_state, shuffle=True)
+        train_dirs, val_dirs = train_test_split(
+            valid_sample_dirs, test_size=config["VALIDATION_SPLIT"],
+            random_state=config["RANDOM_SEED"], shuffle=True
+        )
+
     print(f"Split creato: {len(train_dirs)} train, {len(val_dirs)} validation.")
     return train_dirs, val_dirs, pixel_counts
 
 def calculate_loss_weights(pixel_counts: np.ndarray, device: torch.device) -> torch.Tensor:
-    """Calcola i pesi per la CrossEntropyLoss."""
-    # (Codice identico a prima)
+    """Calcola i pesi per la CrossEntropyLoss basandosi sulla frequenza inversa dei pixel."""
     total_pixels = pixel_counts.sum()
     class_frequencies = pixel_counts / total_pixels
     weights = 1.0 / (class_frequencies + 1e-6)
     weights = weights / weights.mean()
     weights_tensor = torch.tensor(weights, dtype=torch.float).to(device)
+    
     print("Pesi calcolati per la loss (normalizzati):")
-    for i, w in enumerate(weights_tensor): print(f"  - Classe {i}: {w.item():.2f}")
+    for i, w in enumerate(weights_tensor):
+        print(f"  - Classe {i}: {w.item():.2f}")
     return weights_tensor
 
-# --- MODIFICA ---: La funzione ora riceve predizioni (indici) invece di logits
 def calculate_iou_per_class(preds_np: np.ndarray, labels_np: np.ndarray, num_classes: int) -> np.ndarray:
     """Calcola l'IoU per ogni classe su array NumPy."""
     iou_scores = np.zeros(num_classes)
@@ -185,14 +208,14 @@ def calculate_iou_per_class(preds_np: np.ndarray, labels_np: np.ndarray, num_cla
         union = np.logical_or(pred_inds, target_inds).sum()
         
         if union == 0:
-            iou_scores[cls] = 1.0  # La classe non è presente nel target né nella predizione
+            iou_scores[cls] = 1.0
         else:
             iou_scores[cls] = intersection / union
             
     return iou_scores
 
 # =============================================================================
-# 5. FUNZIONI DI TRAINING E VALIDAZIONE (MODIFICATE)
+# 6. FUNZIONI DI TRAINING E VALIDAZIONE
 # =============================================================================
 def train_one_epoch(model: nn.Module, loader: DataLoader, optimizer: optim.Optimizer,
                     criterion: nn.Module, scaler: GradScaler, device: torch.device, use_amp: bool) -> float:
@@ -205,30 +228,27 @@ def train_one_epoch(model: nn.Module, loader: DataLoader, optimizer: optim.Optim
         images = images.to(device)
         masks = masks.to(device)
         
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)
         
-        # --- MODIFICA ---: Usa autocast per mixed precision
         with autocast(enabled=use_amp):
             outputs = model(images)
             loss = criterion(outputs, masks)
         
-        # --- MODIFICA ---: Scaler per il backward pass
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
         
-        running_loss += loss.item() * images.size(0)
+        running_loss += loss.item()
         progress_bar.set_postfix(loss=f"{loss.item():.4f}")
         
-    return running_loss / len(loader.dataset)
+    return running_loss / len(loader)
 
 def evaluate(model: nn.Module, loader: DataLoader, criterion: nn.Module, 
              device: torch.device, num_classes: int) -> Tuple[float, float, np.ndarray]:
-    """Valuta il modello in modo ottimizzato."""
+    """Valuta il modello in modo ottimizzato, restituendo loss, mIoU e IoU per classe."""
     model.eval()
-    running_loss = 0.0
+    total_loss = 0.0
     total_iou = np.zeros(num_classes)
-    num_samples = 0
     
     with torch.no_grad():
         progress_bar = tqdm(loader, desc="Validation")
@@ -238,50 +258,47 @@ def evaluate(model: nn.Module, loader: DataLoader, criterion: nn.Module,
             
             outputs = model(images)
             loss = criterion(outputs, masks)
+            total_loss += loss.item()
             
-            running_loss += loss.item() * images.size(0)
-            
-            # --- MODIFICA ---: Argmax sulla GPU, poi sposta solo gli indici su CPU
             preds = torch.argmax(outputs, dim=1)
             
-            # Calcola IoU per ogni elemento nel batch
+            # Calcola IoU per ogni elemento nel batch, spostando solo i dati necessari
             for i in range(images.size(0)):
                 total_iou += calculate_iou_per_class(
                     preds[i].cpu().numpy(), 
                     masks[i].cpu().numpy(), 
                     num_classes
                 )
-            num_samples += images.size(0)
 
-    epoch_loss = running_loss / len(loader.dataset)
-    # Media per campione, non per batch
-    iou_per_class = total_iou / num_samples
+    avg_loss = total_loss / len(loader)
+    iou_per_class = total_iou / len(loader.dataset)
     mean_iou = iou_per_class.mean()
     
-    return epoch_loss, mean_iou, iou_per_class
+    return avg_loss, mean_iou, iou_per_class
 
 # =============================================================================
-# 6. FUNZIONE PRINCIPALE (MODIFICATA)
+# 7. FUNZIONE PRINCIPALE
 # =============================================================================
 def main():
     """Funzione principale che orchestra il processo di addestramento."""
+    
     config = get_config()
     device = config["DEVICE"]
     use_amp = config["USE_AMP"] and device.type == 'cuda'
     print(f"Device in uso: {device} | Automatic Mixed Precision: {'Abilitata' if use_amp else 'Disabilitata'}")
 
-    train_dirs, val_dirs, pixel_counts = analyze_and_split_dataset(
-        config["DATASET_PATH"], config["VALIDATION_SPLIT"],
-        config["RANDOM_SEED"], config["CLASSI_RARE_INDICI"]
-    )
+    train_dirs, val_dirs, pixel_counts = analyze_and_split_dataset(config)
     
-    # --- MODIFICA ---: Passa la dimensione di output al Dataset
-    train_dataset = SegmentationDataset(sample_dirs=train_dirs, output_size=config["OUTPUT_SIZE"])
-    val_dataset = SegmentationDataset(sample_dirs=val_dirs, output_size=config["OUTPUT_SIZE"])
+    train_transforms = get_train_transforms(config["OUTPUT_SIZE"])
+    val_transforms = get_val_transforms(config["OUTPUT_SIZE"])
+
+    train_dataset = SegmentationDataset(train_dirs, train_transforms)
+    val_dataset = SegmentationDataset(val_dirs, val_transforms)
     
     train_loader = DataLoader(
         train_dataset, batch_size=config["BATCH_SIZE"], shuffle=True,
-        num_workers=config["NUM_WORKERS_TRAIN"], pin_memory=True, persistent_workers=True if config["NUM_WORKERS_TRAIN"] > 0 else False
+        num_workers=config["NUM_WORKERS_TRAIN"], pin_memory=True,
+        persistent_workers=(config["NUM_WORKERS_TRAIN"] > 0)
     )
     val_loader = DataLoader(
         val_dataset, batch_size=config["BATCH_SIZE"], shuffle=False,
@@ -293,18 +310,12 @@ def main():
         in_channels=3, classes=config["NUM_CLASSES"]
     ).to(device)
     
-    # --- MODIFICA (Opzionale) ---: Per PyTorch 2.x, decommentare per un ulteriore speed-up
-    # try:
-    #     model = torch.compile(model)
-    #     print("Modello compilato con torch.compile() per performance migliori.")
-    # except Exception:
-    #     print("torch.compile() non disponibile. Si procede senza.")
+    print(f"Modello smp.Unet con encoder '{config['ENCODER']}' istanziato.")
+    print(f"Parametri addestrabili: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
 
     class_weights = calculate_loss_weights(pixel_counts, device)
     criterion = nn.CrossEntropyLoss(weight=class_weights)
     optimizer = optim.Adam(model.parameters(), lr=config["LEARNING_RATE"])
-    
-    # --- MODIFICA ---: Inizializza il GradScaler per AMP
     scaler = GradScaler(enabled=use_amp)
 
     best_val_miou = -1.0
@@ -320,16 +331,182 @@ def main():
         
         if val_miou > best_val_miou:
             best_val_miou = val_miou
-            # Se il modello è compilato, salva lo stato del modello originale
-            model_to_save = model._orig_mod if hasattr(model, '_orig_mod') else model
-            torch.save(model_to_save.state_dict(), config["MODEL_SAVE_PATH"])
+            torch.save(model.state_dict(), config["MODEL_SAVE_PATH"])
             print(f"\n>>> Nuovo modello migliore salvato in '{config['MODEL_SAVE_PATH']}' con mIoU: {best_val_miou:.4f} <<<\n")
 
     print(f"\n--- Addestramento Completato ---")
-    print(f"Miglior mIoU di validazione: {best_val_miou:.4f}. Modello salvato in: {config['MODEL_SAVE_PATH']}")
+    print(f"Miglior mIoU di validazione: {best_val_miou:.4f}")
 
 # =============================================================================
-# 7. ESECUZIONE
+# 8. ESECUZIONE
 # =============================================================================
 if __name__ == "__main__":
     main()
+
+
+'''
+PS D:\MLPoject-Git\autoencoder-onboard-segmentation> & "C:/Program Files/Python312/python.exe" "d:/MLPoject-Git/autoencoder-onboard-segmentation/local_execution/3 - Loss/loss.py"
+Traceback (most recent call last):
+  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\3 - Loss\loss.py", line 29, in <module>
+    import albumentations as A
+ModuleNotFoundError: No module named 'albumentations'
+PS D:\MLPoject-Git\autoencoder-onboard-segmentation> & "C:/Program Files/Python312/python.exe" "d:/MLPoject-Git/autoencoder-onboard-segmentation/local_execution/3 - Loss/loss.py"
+Device in uso: cuda | Automatic Mixed Precision: Abilitata
+Avvio analisi del dataset e preparazione dello split...
+Traceback (most recent call last):
+  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\3 - Loss\loss.py", line 344, in <module>
+    main()
+  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\3 - Loss\loss.py", line 290, in main
+    train_dirs, val_dirs, pixel_counts = analyze_and_split_dataset(config)
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\3 - Loss\loss.py", line 138, in analyze_and_split_dataset
+    os.path.join(dataset_path, d) for d in os.listdir(dataset_path)
+                                           ^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [WinError 3] The system cannot find the path specified: '../../dataset/training/train'
+PS D:\MLPoject-Git\autoencoder-onboard-segmentation> & "C:/Program Files/Python312/python.exe" "d:/MLPoject-Git/autoencoder-onboard-segmentation/local_execution/3 - Loss/loss.py"
+Device in uso: cuda | Automatic Mixed Precision: Abilitata
+Avvio analisi del dataset e preparazione dello split...
+Trovati 931 campioni.
+Analisi campioni: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████| 931/931 [00:07<00:00, 132.41it/s] 
+Stratificazione basata su 893 campioni con classi rare.
+Split stratificato eseguito con successo.
+Split creato: 744 train, 187 validation.
+C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\albumentations\core\validation.py:114: UserWarning: ShiftScaleRotate is a special case of Affine transform. Please use Affine transform instead.
+  original_init(self, **validated_kwargs)
+Modello smp.Unet con encoder 'resnet34' istanziato.
+Parametri addestrabili: 24,437,529
+Pesi calcolati per la loss (normalizzati):
+  - Classe 0: 0.42
+  - Classe 1: 0.08
+  - Classe 2: 0.09
+  - Classe 3: 0.08
+  - Classe 4: 6.58
+  - Classe 5: 1.40
+  - Classe 6: 0.19
+  - Classe 7: 0.03
+  - Classe 8: 0.12
+d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\3 - Loss\loss.py:319: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  scaler = GradScaler(enabled=use_amp)
+
+--- Inizio Addestramento Ottimizzato ---
+
+--- Epoch 1/15 ---
+Training:   0%|                                                                                                                         | 0/93 [00:00<?, ?it/s]d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\3 - Loss\loss.py:233: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with autocast(enabled=use_amp):
+Training: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████| 93/93 [00:48<00:00,  1.91it/s, loss=1.4241]
+Validation: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 24/24 [00:14<00:00,  1.68it/s] 
+Risultati Epoch 1:
+  - Training Loss: 1.5730 | Validation Loss: 1.4519 | Validation mIoU: 0.2554
+
+>>> Nuovo modello migliore salvato in './best_model_albumentations.pth' con mIoU: 0.2554 <<<
+
+
+--- Epoch 2/15 ---
+Training: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████| 93/93 [00:36<00:00,  2.53it/s, loss=1.3567] 
+Validation: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 24/24 [00:14<00:00,  1.70it/s] 
+Risultati Epoch 2:
+  - Training Loss: 1.1803 | Validation Loss: 1.2623 | Validation mIoU: 0.3013
+
+>>> Nuovo modello migliore salvato in './best_model_albumentations.pth' con mIoU: 0.3013 <<<
+
+
+--- Epoch 3/15 ---
+Training: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████| 93/93 [00:37<00:00,  2.51it/s, loss=0.8869] 
+Validation: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 24/24 [00:14<00:00,  1.70it/s] 
+Risultati Epoch 3:
+  - Training Loss: 1.0360 | Validation Loss: 1.2083 | Validation mIoU: 0.3251
+
+>>> Nuovo modello migliore salvato in './best_model_albumentations.pth' con mIoU: 0.3251 <<<
+
+
+--- Epoch 4/15 ---
+Training: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████| 93/93 [00:37<00:00,  2.50it/s, loss=1.0443] 
+Validation: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 24/24 [00:14<00:00,  1.67it/s] 
+Risultati Epoch 4:
+  - Training Loss: 0.9551 | Validation Loss: 1.0805 | Validation mIoU: 0.3355
+
+>>> Nuovo modello migliore salvato in './best_model_albumentations.pth' con mIoU: 0.3355 <<<
+
+
+--- Epoch 5/15 ---
+Training: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████| 93/93 [00:37<00:00,  2.49it/s, loss=1.3384] 
+Validation: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 24/24 [00:14<00:00,  1.68it/s] 
+Risultati Epoch 5:
+  - Training Loss: 0.9003 | Validation Loss: 1.0518 | Validation mIoU: 0.3513
+
+>>> Nuovo modello migliore salvato in './best_model_albumentations.pth' con mIoU: 0.3513 <<<
+
+
+--- Epoch 6/15 ---
+Training: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████| 93/93 [00:37<00:00,  2.49it/s, loss=1.1241] 
+Validation: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 24/24 [00:14<00:00,  1.67it/s] 
+Risultati Epoch 6:
+  - Training Loss: 0.8346 | Validation Loss: 1.0077 | Validation mIoU: 0.3420
+
+--- Epoch 7/15 ---
+Training: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████| 93/93 [00:37<00:00,  2.48it/s, loss=0.4592] 
+Validation: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 24/24 [00:14<00:00,  1.71it/s] 
+Risultati Epoch 7:
+  - Training Loss: 0.7661 | Validation Loss: 0.9914 | Validation mIoU: 0.3639
+
+>>> Nuovo modello migliore salvato in './best_model_albumentations.pth' con mIoU: 0.3639 <<<
+
+
+--- Epoch 8/15 ---
+Training: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████| 93/93 [00:37<00:00,  2.49it/s, loss=0.6796] 
+Validation: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 24/24 [00:14<00:00,  1.69it/s] 
+Risultati Epoch 8:
+  - Training Loss: 0.7788 | Validation Loss: 1.0040 | Validation mIoU: 0.3460
+
+--- Epoch 9/15 ---
+Training: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████| 93/93 [00:37<00:00,  2.48it/s, loss=0.6700] 
+Validation: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 24/24 [00:14<00:00,  1.68it/s] 
+Risultati Epoch 9:
+  - Training Loss: 0.7473 | Validation Loss: 1.0974 | Validation mIoU: 0.3386
+
+--- Epoch 10/15 ---
+Training: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████| 93/93 [00:37<00:00,  2.48it/s, loss=0.6455] 
+Validation: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 24/24 [00:14<00:00,  1.68it/s] 
+Risultati Epoch 10:
+  - Training Loss: 0.7467 | Validation Loss: 0.9603 | Validation mIoU: 0.3482
+
+--- Epoch 11/15 ---
+Training: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████| 93/93 [00:37<00:00,  2.48it/s, loss=0.5073] 
+Validation: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 24/24 [00:14<00:00,  1.69it/s] 
+Risultati Epoch 11:
+  - Training Loss: 0.6766 | Validation Loss: 0.9440 | Validation mIoU: 0.3667
+
+>>> Nuovo modello migliore salvato in './best_model_albumentations.pth' con mIoU: 0.3667 <<<
+
+
+--- Epoch 12/15 ---
+Training: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████| 93/93 [00:37<00:00,  2.48it/s, loss=0.9332] 
+Validation: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 24/24 [00:14<00:00,  1.64it/s] 
+Risultati Epoch 12:
+  - Training Loss: 0.6661 | Validation Loss: 1.1044 | Validation mIoU: 0.3389
+
+--- Epoch 13/15 ---
+Training: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████| 93/93 [00:37<00:00,  2.48it/s, loss=0.5807] 
+Validation: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 24/24 [00:14<00:00,  1.68it/s] 
+Risultati Epoch 13:
+  - Training Loss: 0.7512 | Validation Loss: 0.9652 | Validation mIoU: 0.3467
+
+--- Epoch 14/15 ---
+Training: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████| 93/93 [00:37<00:00,  2.48it/s, loss=0.7401] 
+Validation: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 24/24 [00:14<00:00,  1.69it/s] 
+Risultati Epoch 14:
+  - Training Loss: 0.6822 | Validation Loss: 0.9177 | Validation mIoU: 0.3633
+
+--- Epoch 15/15 ---
+Training: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████| 93/93 [00:37<00:00,  2.48it/s, loss=0.4712] 
+Validation: 100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 24/24 [00:14<00:00,  1.66it/s] 
+Risultati Epoch 15:
+  - Training Loss: 0.6169 | Validation Loss: 0.9272 | Validation mIoU: 0.3727
+
+>>> Nuovo modello migliore salvato in './best_model_albumentations.pth' con mIoU: 0.3727 <<<
+
+
+--- Addestramento Completato ---
+Miglior mIoU di validazione: 0.3727
+
+'''
