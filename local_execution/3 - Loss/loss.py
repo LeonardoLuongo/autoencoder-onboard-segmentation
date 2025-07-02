@@ -54,8 +54,8 @@ def get_config() -> Dict[str, Any]:
         "MODEL_SAVE_PATH": os.path.join(base_path, "best_model_albumentations.pth"),
 
         # Iperparametri di addestramento
-        "NUM_EPOCHS": 15,
-        "BATCH_SIZE": 8,
+        "NUM_EPOCHS": 40,
+        "BATCH_SIZE": 2,
         "LEARNING_RATE": 1e-4,
 
         # Parametri del dataset, split e augmentation
@@ -71,7 +71,7 @@ def get_config() -> Dict[str, Any]:
         "NUM_WORKERS_VAL": 1,
 
         # Parametri del modello
-        "ENCODER": "resnet34",
+        "ENCODER": "efficientnet-b4",
         "ENCODER_WEIGHTS": "imagenet",
     }
     return config
@@ -232,7 +232,7 @@ def train_one_epoch(model: nn.Module, loader: DataLoader, optimizer: optim.Optim
         
         optimizer.zero_grad(set_to_none=True)
         
-        with torch.amp.autocast(enabled=use_amp):
+        with torch.amp.autocast(enabled=use_amp, device_type=device.type):
             outputs = model(images)
             loss = 0.5 * criterion_ce(outputs, masks) + 0.5 * criterion_dice(outputs, masks)
         
@@ -245,7 +245,7 @@ def train_one_epoch(model: nn.Module, loader: DataLoader, optimizer: optim.Optim
         
     return running_loss / len(loader)
 
-def evaluate(model: nn.Module, loader: DataLoader, criterion: nn.Module, 
+def evaluate(model: nn.Module, loader: DataLoader, criterion_ce: nn.Module, criterion_dice: nn.Module,
              device: torch.device, num_classes: int) -> Tuple[float, float, np.ndarray]:
     """Valuta il modello in modo ottimizzato, restituendo loss, mIoU e IoU per classe."""
     model.eval()
@@ -259,7 +259,7 @@ def evaluate(model: nn.Module, loader: DataLoader, criterion: nn.Module,
             masks = masks.to(device)
             
             outputs = model(images)
-            loss = criterion(outputs, masks)
+            loss = 0.5 * criterion_ce(outputs, masks) + 0.5 * criterion_dice(outputs, masks)
             total_loss += loss.item()
             
             preds = torch.argmax(outputs, dim=1)
@@ -327,7 +327,6 @@ def main():
         mode='max',      # Riduci quando la metrica smette di AUMENTARE
         factor=0.1,      # Riduci LR del 90% (1 * 0.1)
         patience=3,      # Aspetta 3 epoche senza miglioramenti prima di ridurre
-        verbose=True     # Stampa un messaggio quando riduce il LR
     )
     scaler = torch.amp.GradScaler(enabled=use_amp)
 
@@ -337,7 +336,7 @@ def main():
         print(f"\n--- Epoch {epoch+1}/{config['NUM_EPOCHS']} ---")
         
         train_loss = train_one_epoch(model, train_loader, optimizer, criterion_ce, criterion_dice, scaler, device, use_amp)
-        val_loss, val_miou, val_iou_per_class = evaluate(model, val_loader, criterion_ce, device, criterion_dice, config["NUM_CLASSES"])
+        val_loss, val_miou, val_iou_per_class = evaluate(model, val_loader, criterion_ce, criterion_dice, device, config["NUM_CLASSES"])
         scheduler.step(val_miou)  # Riduci LR se mIoU non migliora
         
         print(f"Risultati Epoch {epoch+1}:")
