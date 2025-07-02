@@ -54,7 +54,7 @@ def get_config() -> Dict[str, Any]:
         "MODEL_SAVE_PATH": os.path.join(base_path, "best_model_albumentations.pth"),
 
         # Iperparametri di addestramento
-        "NUM_EPOCHS": 40,
+        "NUM_EPOCHS": 25,
         "BATCH_SIZE": 2,
         "LEARNING_RATE": 1e-4,
 
