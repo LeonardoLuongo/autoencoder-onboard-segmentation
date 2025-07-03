@@ -84,7 +84,8 @@ def get_config() -> Dict[str, Any]:
         "IGNORE_INDEX": 0,
         "VALIDATION_SPLIT": 0.2,
         "RANDOM_SEED": 42,
-        "NUM_WORKERS": 0,
+        "NUM_WORKERS_TRAIN": 2,
+        "NUM_WORKERS_VAL": 1,
         "USE_AMP": True,
         
         "RARE_CLASS_INDICES": [2, 6, 8], # Rough Trail, LowVeg, Obstacle
@@ -282,8 +283,8 @@ def main():
     val_dataset = SegmentationDataset(val_dirs, transforms, config)
     
     pin_mem = device.type == 'cuda' # FIX: usa pin_memory solo con GPU
-    train_loader = DataLoader(train_dataset, batch_size=config["BATCH_SIZE"], shuffle=True, num_workers=config["NUM_WORKERS"], pin_memory=pin_mem)
-    val_loader = DataLoader(val_dataset, batch_size=config["BATCH_SIZE"], shuffle=False, num_workers=config["NUM_WORKERS"], pin_memory=pin_mem)
+    train_loader = DataLoader(train_dataset, batch_size=config["BATCH_SIZE"], shuffle=True, num_workers=config["NUM_WORKERS_TRAIN"], pin_memory=pin_mem)
+    val_loader = DataLoader(val_dataset, batch_size=config["BATCH_SIZE"], shuffle=False, num_workers=config["NUM_WORKERS_VAL"], pin_memory=pin_mem)
 
     model = get_model(config).to(device)
     criterion = CombinedDiceFocalLoss()
