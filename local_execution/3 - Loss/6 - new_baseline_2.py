@@ -1,4 +1,4 @@
-# SCRIPT DI TRAINING FINALE CON AUGMENTATION OFFLINE E ANALISI AVANZATA
+# SCRIPT DI TRAINING FINALE CON PIPELINE DATI CORRETTA E ANALISI AVANZATA
 
 # =============================================================================
 # 1. IMPORTS
@@ -39,7 +39,7 @@ def get_config() -> Dict[str, Any]:
         "DATASET_PATH_TRAIN": os.path.join(base_path, "dataset/training/train"),
         "DATASET_PATH_AUG": os.path.join(base_path, "dataset/training/augmented"),
         "DATASET_PATH_AUG_AGGR": os.path.join(base_path, "dataset/training/augmented_aggressive"),
-        "MODEL_SAVE_PATH": os.path.join(base_path, "final_model_efficientnet-b4_dice_focal.pth"),
+        "MODEL_SAVE_PATH": os.path.join(base_path, "final_model_efficientnet-b4_dice_focal_CORRECT_DATA.pth"),
         
         "ENCODER": "efficientnet-b4",
         "ENCODER_WEIGHTS": "imagenet",
@@ -68,7 +68,7 @@ def get_config() -> Dict[str, Any]:
     return config
 
 # =============================================================================
-# 3. GESTIONE DATI (DA SCRIPT ORIGINALE)
+# 3. GESTIONE DATI (CON FIX)
 # =============================================================================
 def get_grouped_stratified_split(config: Dict[str, Any]) -> Tuple[List[str], List[str]]:
     paths = {
@@ -79,12 +79,18 @@ def get_grouped_stratified_split(config: Dict[str, Any]) -> Tuple[List[str], Lis
     all_dirs = []
     print("Caricamento percorsi dei dataset...")
     for key, path in paths.items():
+        if not os.path.isdir(path):
+            print(f"Attenzione: il percorso '{path}' non esiste, verrà saltato.")
+            continue
         dirs = [d for d in glob.glob(os.path.join(path, "*")) if os.path.isdir(d)]
         print(f"Trovati {len(dirs)} campioni in '{key}'.")
         all_dirs.extend(dirs)
     
+    if not all_dirs:
+        raise FileNotFoundError("Nessuna directory di dati trovata. Controlla i percorsi nella configurazione.")
+
     print(f"Dimensione totale del dataset di training: {len(all_dirs)} campioni.")
-    all_dirs = sorted(list(set(all_dirs))) # Rimuovi duplicati e ordina
+    all_dirs = sorted(list(set(all_dirs)))
 
     hashes = {path: imagehash.phash(Image.open(os.path.join(path, 'rgb.jpg'))) for path in tqdm(all_dirs, desc="Calcolo Hash")}
     
@@ -101,10 +107,15 @@ def get_grouped_stratified_split(config: Dict[str, Any]) -> Tuple[List[str], Lis
     
     group_labels = []
     for group in tqdm(image_groups, desc="Etichettatura gruppi per lo split"):
-        has_rare = any(
-            rare_id in np.unique(Image.open(os.path.join(p, 'labels.png')).convert("L"))
-            for p in group for rare_id in config["RARE_CLASS_INDICES"]
-        )
+        has_rare = False
+        for p in group:
+            mask_path = os.path.join(p, 'labels.png')
+            # --- FIX: Caricamento corretto della maschera senza .convert('L') ---
+            mask = np.array(Image.open(mask_path)) 
+            unique_classes = np.unique(mask)
+            if any(rare_id in unique_classes for rare_id in config["RARE_CLASS_INDICES"]):
+                has_rare = True
+                break
         group_labels.append(1 if has_rare else 0)
         
     train_groups, val_groups = train_test_split(
@@ -119,7 +130,6 @@ def get_grouped_stratified_split(config: Dict[str, Any]) -> Tuple[List[str], Lis
     return train_dirs, val_dirs
 
 def get_transforms(output_size: Tuple[int, int]) -> A.Compose:
-    """Restituisce la pipeline di solo preprocessing (no augmentation online)."""
     return A.Compose([
         A.Resize(height=output_size[0], width=output_size[1]),
         A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
@@ -127,10 +137,10 @@ def get_transforms(output_size: Tuple[int, int]) -> A.Compose:
     ])
 
 class SegmentationDataset(Dataset):
-    """Dataset che carica le maschere pre-etichettate (non RGB)."""
-    def __init__(self, sample_dirs: List[str], transform: A.Compose):
+    def __init__(self, sample_dirs: List[str], transform: A.Compose, config: Dict[str, Any]):
         self.sample_dirs = sample_dirs
         self.transform = transform
+        self.config = config
 
     def __len__(self) -> int:
         return len(self.sample_dirs)
@@ -141,8 +151,17 @@ class SegmentationDataset(Dataset):
         mask_path = os.path.join(sample_dir, 'labels.png')
         
         image = np.array(Image.open(img_path).convert("RGB"))
-        mask = np.array(Image.open(mask_path).convert("L")) # Carica come scala di grigi (indici)
         
+        # --- FIX: Caricamento corretto della maschera senza .convert('L') ---
+        # Questo legge direttamente gli indici 0-8 dalla modalità 'P' dell'immagine
+        mask = np.array(Image.open(mask_path))
+        
+        # --- ASSERT DI SICUREZZA ---
+        # Garantisce che non ci siano ID di classe non validi prima di procedere.
+        assert mask.max() < self.config["NUM_CLASSES"], \
+            f"Errore: maschera {mask_path} contiene un ID di classe ({mask.max()}) " \
+            f"superiore al massimo consentito ({self.config['NUM_CLASSES'] - 1})."
+            
         augmented = self.transform(image=image, mask=mask)
         return augmented['image'], augmented['mask']
 
@@ -162,28 +181,22 @@ def get_model(config: Dict[str, Any]) -> nn.Module:
     return model
 
 class CombinedDiceFocalLoss(nn.Module):
-    """Combina Dice Loss e Focal Loss."""
     def __init__(self, dice_weight=0.5, focal_weight=0.5, focal_gamma=2.0):
         super().__init__()
-        # DiceLoss necessita dell'argomento esplicito
         self.dice = DiceLoss(mode='multiclass', from_logits=True)
-        # FocalLoss assume già i logits, quindi l'argomento non serve e non esiste
-        self.focal = FocalLoss(mode='multiclass', gamma=focal_gamma) # <-- MODIFICA QUI
+        self.focal = FocalLoss(mode='multiclass', gamma=focal_gamma)
         self.dice_weight = dice_weight
         self.focal_weight = focal_weight
 
     def forward(self, pred, target):
-        dice_loss_val = self.dice(pred, target)
-        focal_loss_val = self.focal(pred, target)
-        return self.dice_weight * dice_loss_val + self.focal_weight * focal_loss_val
-    
+        return self.dice_weight * self.dice(pred, target) + self.focal_weight * self.focal(pred, target)
 
 def compute_iou(preds, labels, num_classes, ignore_index):
+    # ... (invariata)
     iou_per_class = np.zeros(num_classes)
     for cls in range(num_classes):
         if cls == ignore_index: continue
-        pred_inds = (preds == cls)
-        target_inds = (labels == cls)
+        pred_inds, target_inds = (preds == cls), (labels == cls)
         intersection = np.logical_and(pred_inds, target_inds).sum()
         union = np.logical_or(pred_inds, target_inds).sum()
         iou_per_class[cls] = intersection / union if union > 0 else np.nan
@@ -191,18 +204,14 @@ def compute_iou(preds, labels, num_classes, ignore_index):
     return mean_iou, iou_per_class
 
 def plot_confusion_matrix(all_labels, all_preds, class_names, ignore_index):
-    """Calcola e visualizza la matrice di confusione normalizzata."""
+    # ... (invariata)
     print("Calcolo della Matrice di Confusione...")
     labels_to_include = [i for i, name in enumerate(class_names) if i != ignore_index]
     names_to_include = [name for i, name in enumerate(class_names) if i != ignore_index]
-
     cm = confusion_matrix(
-        all_labels.flatten(), 
-        all_preds.flatten(), 
-        labels=labels_to_include,
-        normalize='true'
+        all_labels.flatten(), all_preds.flatten(), 
+        labels=labels_to_include, normalize='true'
     )
-    
     plt.figure(figsize=(12, 10))
     sns.heatmap(
         cm, annot=True, fmt='.2%', cmap='Blues',
@@ -214,9 +223,10 @@ def plot_confusion_matrix(all_labels, all_preds, class_names, ignore_index):
     plt.show()
 
 # =============================================================================
-# 5. CICLI DI TRAINING E VALIDAZIONE
+# 5. CICLI DI TRAINING E VALIDAZIONE (invariati)
 # =============================================================================
 def train_one_epoch(model, loader, optimizer, criterion, scaler, device, use_amp):
+    # ... (invariata)
     model.train()
     running_loss = 0.0
     progress_bar = tqdm(loader, desc="Training", leave=False)
@@ -234,9 +244,9 @@ def train_one_epoch(model, loader, optimizer, criterion, scaler, device, use_amp
     return running_loss / len(loader)
 
 def evaluate(model, loader, criterion, device, config) -> Tuple[float, float, np.ndarray, np.ndarray, np.ndarray]:
+    # ... (invariata)
     model.eval()
-    total_loss = 0.0
-    all_preds, all_labels = [], []
+    total_loss, all_preds, all_labels = 0.0, [], []
     with torch.no_grad():
         for images, masks in tqdm(loader, desc="Validazione", leave=False):
             images, masks = images.to(device), masks.to(device, dtype=torch.long)
@@ -247,9 +257,7 @@ def evaluate(model, loader, criterion, device, config) -> Tuple[float, float, np
             preds = torch.argmax(outputs, dim=1)
             all_preds.append(preds.cpu().numpy())
             all_labels.append(masks.cpu().numpy())
-            
-    all_preds = np.concatenate(all_preds)
-    all_labels = np.concatenate(all_labels)
+    all_preds, all_labels = np.concatenate(all_preds), np.concatenate(all_labels)
     avg_loss = total_loss / len(loader)
     mean_iou, iou_per_class = compute_iou(all_preds, all_labels, config["NUM_CLASSES"], config["IGNORE_INDEX"])
     return avg_loss, mean_iou, iou_per_class, all_labels, all_preds
@@ -262,13 +270,14 @@ def main():
     device = config["DEVICE"]
     use_amp = config["USE_AMP"] and device.type == 'cuda'
     print(f"Device: {device} | Mixed Precision: {use_amp}")
-    print(f"Esperimento Finale: {config['ENCODER']}, dati offline, Dice+Focal Loss")
+    print(f"Esperimento Finale: {config['ENCODER']} con pipeline dati CORRETTA")
 
     train_dirs, val_dirs = get_grouped_stratified_split(config)
     
     transforms = get_transforms(config["OUTPUT_SIZE"])
-    train_dataset = SegmentationDataset(train_dirs, transforms)
-    val_dataset = SegmentationDataset(val_dirs, transforms)
+    # Passa la config al Dataset per l'assert
+    train_dataset = SegmentationDataset(train_dirs, transforms, config)
+    val_dataset = SegmentationDataset(val_dirs, transforms, config)
 
     train_loader = DataLoader(
         train_dataset, batch_size=config["BATCH_SIZE"], shuffle=True,
@@ -282,12 +291,12 @@ def main():
     model = get_model(config).to(device)
     criterion = CombinedDiceFocalLoss()
     optimizer = optim.Adam(model.parameters(), lr=config["LEARNING_RATE"], weight_decay=config["WEIGHT_DECAY"])
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.2)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=3, verbose=True, factor=0.2)
     scaler = GradScaler(enabled=use_amp)
 
     best_iou = -1.0
     
-    print("\n--- Inizio Training ---")
+    print("\n--- Inizio Training con Dati Corretti ---")
     for epoch in range(config["NUM_EPOCHS"]):
         print(f"\n--- Epoch {epoch+1}/{config['NUM_EPOCHS']} ---")
         
@@ -317,82 +326,3 @@ def main():
 # =============================================================================
 if __name__ == "__main__":
     main()
-
-
-'''
-:\Users\leona\AppData\Roaming\Python\Python312\site-packages\albumentations\check_version.py:147: UserWarning: Error fetching version info <urlopen error _ssl.c:983: The handshake operation timed out>
-  data = fetch_version_info()
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [64,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [65,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [66,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [67,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [68,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [69,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [70,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [71,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [72,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [73,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [74,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [75,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [76,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [77,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [78,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [79,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [80,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [81,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [82,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [83,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [84,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [85,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [86,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [87,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [88,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [89,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [90,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [91,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [92,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [93,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [94,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [95,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-Traceback (most recent call last):
-  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\3 - Loss\6 - new_baseline_2.py", line 319, in <module>
-    main()
-  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\3 - Loss\6 - new_baseline_2.py", line 294, in main
-    train_loss = train_one_epoch(model, train_loader, optimizer, criterion, scaler, device, use_amp)
-                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\3 - Loss\6 - new_baseline_2.py", line 227, in train_one_epoch
-    loss = criterion(outputs, masks)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\nn\modules\module.py", line 1751, in _wrapped_call_impl
-    return self._call_impl(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\nn\modules\module.py", line 1762, in _call_impl
-    return forward_call(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\3 - Loss\6 - new_baseline_2.py", line 176, in forward
-    dice_loss_val = self.dice(pred, target)
-                    ^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\nn\modules\module.py", line 1751, in _wrapped_call_impl
-    return self._call_impl(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\nn\modules\module.py", line 1762, in _call_impl
-    return forward_call(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\segmentation_models_pytorch\losses\dice.py", line 109, in forward
-    scores = self.compute_score(
-             ^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\segmentation_models_pytorch\losses\dice.py", line 137, in compute_score
-    return soft_dice_score(output, target, smooth, eps, dims)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\segmentation_models_pytorch\losses\_functional.py", line 173, in soft_dice_score
-    dice_score = soft_tversky_score(output, target, 0.5, 0.5, smooth, eps, dims)
-                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\segmentation_models_pytorch\losses\_functional.py", line 196, in soft_tversky_score
-    output_sum = torch.sum(output, dim=dims)
-                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-RuntimeError: CUDA error: device-side assert triggered
-CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
-For debugging consider passing CUDA_LAUNCH_BLOCKING=1
-Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
-
-'''
