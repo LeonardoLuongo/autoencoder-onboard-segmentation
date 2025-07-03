@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 
 import numpy as np
 from PIL import Image
@@ -252,3 +252,172 @@ def main():
 # =============================================================================
 if __name__ == "__main__":
     main()
+
+
+'''
+> & "C:/Program Files/Python312/python.exe" "d:/MLPoject-Git/autoencoder-onboard-segmentation/local_execution/3 - Loss/6 - new_baseline_2.py"
+Device: cuda | Mixed Precision: True
+Esperimento: Attacco Finale con efficientnet-b4 e TverskyLoss
+Dataset: 744 train, 187 val | Risoluzione: (384, 768)
+Creazione del modello: U-Net con encoder 'efficientnet-b4'
+Parametri addestrabili del modello: 20,226,849
+Loss function: TverskyLoss (generalizzazione di Dice Loss)
+
+--- Inizio Training 'Attacco Finale' ---
+
+--- Epoch 1/25 ---
+Risultati Epoch 1:
+  - Train Loss: 0.6260 | Val Loss: 0.4980 | Val mIoU: 0.2818
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.8194
+    - Classe 2 (Rough): 0.0000
+    - Classe 3 (Smooth): 0.5201
+    - Classe 4 (Grass): 0.4137
+    - Classe 5 (HighVeg): 0.7162
+    - Classe 6 (LowVeg): 0.0032
+    - Classe 7 (Debris): 0.0630
+    - Classe 8 (Obstacle): 0.0008
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.2818 <<<
+
+
+--- Epoch 2/25 ---
+Risultati Epoch 2:                                                                                                                                                                
+  - Train Loss: 0.4473 | Val Loss: 0.3771 | Val mIoU: 0.3575
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.8748
+    - Classe 2 (Rough): 0.0000
+    - Classe 3 (Smooth): 0.5776
+    - Classe 4 (Grass): 0.5267
+    - Classe 5 (HighVeg): 0.8153
+    - Classe 6 (LowVeg): 0.0056
+    - Classe 7 (Debris): 0.4176
+    - Classe 8 (Obstacle): 0.0000
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.3575 <<<
+
+
+--- Epoch 3/25 ---
+Risultati Epoch 3:                                                                                                                                                                
+  - Train Loss: 0.3782 | Val Loss: 0.3280 | Val mIoU: 0.3958
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.8853
+    - Classe 2 (Rough): 0.0000
+    - Classe 3 (Smooth): 0.5402
+    - Classe 4 (Grass): 0.5843
+    - Classe 5 (HighVeg): 0.8227
+    - Classe 6 (LowVeg): 0.2005
+    - Classe 7 (Debris): 0.5289
+    - Classe 8 (Obstacle): 0.0000
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.3958 <<<
+
+
+--- Epoch 4/25 ---
+Risultati Epoch 4:                                                                                                                                                                
+  - Train Loss: 0.3249 | Val Loss: 0.3030 | Val mIoU: 0.4068
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.8921
+    - Classe 2 (Rough): 0.0000
+    - Classe 3 (Smooth): 0.6558
+    - Classe 4 (Grass): 0.5591
+    - Classe 5 (HighVeg): 0.7778
+    - Classe 6 (LowVeg): 0.2113
+    - Classe 7 (Debris): 0.5651
+    - Classe 8 (Obstacle): 0.0000
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.4068 <<<
+
+
+--- Epoch 5/25 ---
+Risultati Epoch 5:                                                                                                                                                                
+  - Train Loss: 0.2945 | Val Loss: 0.2876 | Val mIoU: 0.4210
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.8874
+    - Classe 2 (Rough): 0.0000
+    - Classe 3 (Smooth): 0.6690
+    - Classe 4 (Grass): 0.6032
+    - Classe 5 (HighVeg): 0.8268
+    - Classe 6 (LowVeg): 0.2453
+    - Classe 7 (Debris): 0.5574
+    - Classe 8 (Obstacle): 0.0000
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.4210 <<<
+
+
+--- Epoch 6/25 ---
+Risultati Epoch 6:                                                                                                                                                                
+  - Train Loss: 0.2778 | Val Loss: 0.2893 | Val mIoU: 0.4120
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.8968
+    - Classe 2 (Rough): 0.0000
+    - Classe 3 (Smooth): 0.5298
+    - Classe 4 (Grass): 0.6235
+    - Classe 5 (HighVeg): 0.8313
+    - Classe 6 (LowVeg): 0.2695
+    - Classe 7 (Debris): 0.5572
+    - Classe 8 (Obstacle): 0.0000
+
+--- Epoch 7/25 ---
+Risultati Epoch 7:                                                                                                                                                                
+  - Train Loss: 0.2667 | Val Loss: 0.2885 | Val mIoU: 0.4116
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.8914
+    - Classe 2 (Rough): 0.0000
+    - Classe 3 (Smooth): 0.6231
+    - Classe 4 (Grass): 0.6457
+    - Classe 5 (HighVeg): 0.8160
+    - Classe 6 (LowVeg): 0.2777
+    - Classe 7 (Debris): 0.4505
+    - Classe 8 (Obstacle): 0.0000
+
+--- Epoch 8/25 ---
+Risultati Epoch 8:                                                                                                                                                                
+  - Train Loss: 0.2643 | Val Loss: 0.2741 | Val mIoU: 0.4262
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.8992
+    - Classe 2 (Rough): 0.0000
+    - Classe 3 (Smooth): 0.5968
+    - Classe 4 (Grass): 0.6361
+    - Classe 5 (HighVeg): 0.8380
+    - Classe 6 (LowVeg): 0.2781
+    - Classe 7 (Debris): 0.5860
+    - Classe 8 (Obstacle): 0.0018
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.4262 <<<
+
+
+--- Epoch 9/25 ---
+Risultati Epoch 9:                                                                                                                                                                
+  - Train Loss: 0.2506 | Val Loss: 0.2790 | Val mIoU: 0.4306
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.8984
+    - Classe 2 (Rough): 0.0000
+    - Classe 3 (Smooth): 0.6381
+    - Classe 4 (Grass): 0.5860
+    - Classe 5 (HighVeg): 0.8246
+    - Classe 6 (LowVeg): 0.2339
+    - Classe 7 (Debris): 0.5502
+    - Classe 8 (Obstacle): 0.1445
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.4306 <<<
+
+
+--- Epoch 10/25 ---
+Risultati Epoch 10:                                                                                                                                                               
+  - Train Loss: 0.2291 | Val Loss: 0.2648 | Val mIoU: 0.4477
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.9017
+    - Classe 2 (Rough): 0.0000
+    - Classe 3 (Smooth): 0.6307
+    - Classe 4 (Grass): 0.6066
+    - Classe 5 (HighVeg): 0.8294
+    - Classe 6 (LowVeg): 0.2508
+    - Classe 7 (Debris): 0.5619
+    - Classe 8 (Obstacle): 0.2479
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.4477 <<<
+
+
+
+'''
