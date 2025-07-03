@@ -111,13 +111,34 @@ def get_transforms(is_train: bool, output_size: Tuple[int, int]) -> A.Compose:
 # 4. FUNZIONI HELPER (SPLIT E METRICHE)
 # =============================================================================
 def get_grouped_stratified_split(config: Dict[str, Any]) -> Tuple[List[str], List[str]]:
+    # Percorso al dataset di training originale
     dataset_path_train = config["DATASET_PATH_TRAIN"]
+
+    # Percorso al dataset aumentato
     dataset_path_aug = config["DATASET_PATH_AUG"]
-    print("Avvio analisi di similarità e split stratificato...")
-    all_dirs = sorted(
-        [d for d in glob.glob(os.path.join(dataset_path_train, "*")) if os.path.isdir(d) and not os.path.basename(d).startswith('__')],
-        [d for d in glob.glob(os.path.join(dataset_path_aug, "*")) if os.path.isdir(d) and not os.path.basename(d).startswith('__')]
-        )
+
+    print("Caricamento percorsi dei dataset...")
+
+    # Ottieni la lista delle directory originali
+    original_dirs = [
+        d for d in glob.glob(os.path.join(dataset_path_train, "*")) 
+        if os.path.isdir(d) and not os.path.basename(d).startswith('__')
+    ]
+    print(f"Trovati {len(original_dirs)} campioni originali.")
+
+    # Ottieni la lista delle directory aumentate
+    augmented_dirs = [
+        d for d in glob.glob(os.path.join(dataset_path_aug, "*")) 
+        if os.path.isdir(d) and not os.path.basename(d).startswith('__')
+    ]
+    print(f"Trovati {len(augmented_dirs)} campioni aumentati.")
+
+    # Unisci le due liste in un'unica lista
+    all_dirs = original_dirs + augmented_dirs
+    print(f"Dimensione totale del dataset di training (originale + aumentato): {len(all_dirs)} campioni.")
+
+    # Opzionale ma consigliato: ordina la lista finale per riproducibilità
+    all_dirs = sorted(all_dirs)
     
     hashes = {path: imagehash.phash(Image.open(os.path.join(path, 'rgb.jpg'))) for path in tqdm(all_dirs, desc="Calcolo Hash", leave=False)}
     
