@@ -1,4 +1,4 @@
-# SCRIPT DI TRAINING FINALE - EDIZIONE PROFESSIONALE
+# SCRIPT DI TRAINING FINALE - EDIZIONE PROFESSIONALE (CON OTTIMIZZAZIONE HASH)
 
 # =============================================================================
 # 1. IMPORTS
@@ -7,20 +7,19 @@ import os
 import random
 import glob
 from typing import Tuple, List, Dict, Any
-import cv2 # Importato per l'interpolazione NEAREST
+import cv2
+from collections import defaultdict # <--- AGGIUNTO
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 
-# Import AMP retro-compatibile e robusto
 try:
     from torch.cuda.amp import GradScaler, autocast
     AMP_AVAILABLE = True
 except ImportError:
     AMP_AVAILABLE = False
-    # Placeholder per ambienti senza CUDA/AMP
     class autocast:
         def __init__(self, enabled=False): self.enabled = enabled
         def __enter__(self): pass
@@ -49,7 +48,6 @@ import seaborn as sns
 # 2. RIPRODUCIBILITÀ
 # =============================================================================
 def seed_everything(seed: int):
-    """Fissa la seed per garantire la riproducibilità degli esperimenti."""
     random.seed(seed)
     os.environ['PYTHONHASHSEED'] = str(seed)
     np.random.seed(seed)
@@ -62,38 +60,32 @@ def seed_everything(seed: int):
 # 3. CONFIGURAZIONE
 # =============================================================================
 def get_config() -> Dict[str, Any]:
+    # ... (invariata) ...
     base_path = "./"
     config = {
         "DEVICE": torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
         "DATASET_PATH_TRAIN": os.path.join(base_path, "dataset/training/train"),
         "DATASET_PATH_AUG": os.path.join(base_path, "dataset/training/augmented"),
         "DATASET_PATH_AUG_AGGR": os.path.join(base_path, "dataset/training/augmented_aggressive"),
-        "MODEL_SAVE_PATH": os.path.join(base_path, "best_model.pth"), # Nome generico per il modello migliore
-        
-        # --- Configurazione conservativa per stabilità ---
+        "MODEL_SAVE_PATH": os.path.join(base_path, "best_model.pth"),
         "ENCODER": "efficientnet-b2",
         "ENCODER_WEIGHTS": "imagenet",
         "OUTPUT_SIZE": (384, 768),
         "BATCH_SIZE": 4,
-
         "NUM_EPOCHS": 30,
         "LEARNING_RATE": 1e-4,
         "WEIGHT_DECAY": 1e-5,
-
         "NUM_CLASSES": 9,
         "IGNORE_INDEX": 0,
         "VALIDATION_SPLIT": 0.2,
         "RANDOM_SEED": 42,
-        "NUM_WORKERS_TRAIN": 2,
-        "NUM_WORKERS_VAL": 1,
+        "NUM_WORKERS": 0,
         "USE_AMP": True,
-        
-        "RARE_CLASS_INDICES": [2, 6, 8], # Rough Trail, LowVeg, Obstacle
+        "RARE_CLASS_INDICES": [2, 6, 8],
     }
-    
     config["CLASS_NAMES"] = [
         "Ignored", "Sky", "Rough", "Smooth", "Grass", 
-        "HighVeg", "LowVeg", "Puddle", "Obstacle" # FIX: Rinominata classe 7
+        "HighVeg", "LowVeg", "Puddle", "Obstacle"
     ]
     return config
 
@@ -101,7 +93,6 @@ def get_config() -> Dict[str, Any]:
 # 4. GESTIONE DATI
 # =============================================================================
 def get_grouped_stratified_split(config: Dict[str, Any]) -> Tuple[List[str], List[str]]:
-    # ... (invariata, ma robusta) ...
     paths = {
         "original": config["DATASET_PATH_TRAIN"],
         "augmented": config["DATASET_PATH_AUG"],
@@ -119,23 +110,29 @@ def get_grouped_stratified_split(config: Dict[str, Any]) -> Tuple[List[str], Lis
     if not all_dirs: raise FileNotFoundError("Nessuna directory di dati trovata.")
     all_dirs = sorted(list(set(all_dirs)))
 
-    # 1. Calcola gli hash per ogni immagine
-    hashes = {path: imagehash.phash(Image.open(os.path.join(path, 'rgb.jpg'))) 
-              for path in tqdm(all_dirs, desc="Calcolo Hash")}
-    
-    # 2. Crea un grafo vuoto e aggiungi tutti i percorsi come nodi
+    hashes = {path: imagehash.phash(Image.open(os.path.join(path, 'rgb.jpg'))) for path in tqdm(all_dirs, desc="Calcolo Hash")}
+
+    # --- OTTIMIZZAZIONE: BUCKETING PER RIDURRE I CONFRONTI ---
+    tqdm.write("Creazione dei bucket per l'ottimizzazione del confronto...")
+    buckets = defaultdict(list)
+    for path, h in hashes.items():
+        bucket_key = int(str(h)[:2], 16)
+        buckets[bucket_key].append((path, h))
+
     G = nx.Graph()
     G.add_nodes_from(hashes.keys())
     
-    # 3. Aggiungi gli archi (collegamenti) tra le immagini simili
-    #    Questo è il modo corretto e leggibile per farlo.
-    path_list = list(hashes.keys())
-    for i in range(len(path_list)):
-        for j in range(i + 1, len(path_list)):
-            if hashes[path_list[i]] - hashes[path_list[j]] < 5:
-                G.add_edge(path_list[i], path_list[j])
+    tqdm.write("Confronto delle immagini all'interno dei bucket (ottimizzato)...")
+    for bucket_key, items_in_bucket in tqdm(buckets.items(), desc="Analisi Bucket"):
+        if len(items_in_bucket) < 2:
+            continue
+        for i in range(len(items_in_bucket)):
+            for j in range(i + 1, len(items_in_bucket)):
+                path1, hash1 = items_in_bucket[i]
+                path2, hash2 = items_in_bucket[j]
+                if hash1 - hash2 < 5:
+                    G.add_edge(path1, path2)
                 
-    # 4. Ora, su questo grafo corretto, trova i gruppi di immagini connesse
     image_groups = list(nx.connected_components(G))
     tqdm.write(f"Trovati {len(image_groups)} gruppi di immagini uniche.")
     
@@ -151,14 +148,15 @@ def get_grouped_stratified_split(config: Dict[str, Any]) -> Tuple[List[str], Lis
         image_groups, test_size=config["VALIDATION_SPLIT"],
         random_state=config["RANDOM_SEED"], stratify=group_labels
     )
+    
     train_dirs = [p for group in train_groups for p in group]
     val_dirs = [p for group in val_groups for p in group]
+    
     tqdm.write(f"Split stratificato creato: {len(train_dirs)} train, {len(val_dirs)} validation.")
     return train_dirs, val_dirs
 
 def get_transforms(output_size: Tuple[int, int]) -> A.Compose:
     return A.Compose([
-        # FIX: Aggiunta interpolazione NEAREST per le maschere, per evitare di creare ID non interi.
         A.Resize(height=output_size[0], width=output_size[1], interpolation=cv2.INTER_NEAREST),
         A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ToTensorV2(),
@@ -167,44 +165,39 @@ def get_transforms(output_size: Tuple[int, int]) -> A.Compose:
 class SegmentationDataset(Dataset):
     def __init__(self, sample_dirs: List[str], transform: A.Compose, config: Dict[str, Any]):
         self.sample_dirs, self.transform, self.config = sample_dirs, transform, config
-
+    
     def __len__(self) -> int: return len(self.sample_dirs)
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         sample_dir = self.sample_dirs[idx]
         image = np.array(Image.open(os.path.join(sample_dir, 'rgb.jpg')).convert("RGB"))
         mask = np.array(Image.open(os.path.join(sample_dir, 'labels.png')))
-        
-        # FIX: Asserzioni di robustezza sulla maschera
         assert mask.dtype == np.uint8, f"Tipo maschera non corretto: {mask.dtype}"
         assert mask.max() < self.config["NUM_CLASSES"], f"ID classe non valido in {os.path.join(sample_dir, 'labels.png')}"
-            
-        return self.transform(image=image, mask=mask).values()
+        augmented = self.transform(image=image, mask=mask)
+        return augmented['image'], augmented['mask']
 
 # =============================================================================
-# 5. MODELLO, LOSS E METRICHE
+# 5. MODELLO, LOSS E METRICHE (INVARIATO)
 # =============================================================================
 def get_model(config: Dict[str, Any]) -> nn.Module:
-    model = smp.Unet(
-        encoder_name=config["ENCODER"], encoder_weights=config["ENCODER_WEIGHTS"],
-        in_channels=3, classes=config["NUM_CLASSES"]
-    )
+    # ... (invariato)
+    model = smp.Unet(encoder_name=config["ENCODER"], encoder_weights=config["ENCODER_WEIGHTS"], in_channels=3, classes=config["NUM_CLASSES"])
     tqdm.write(f"Creazione del modello: U-Net con encoder '{config['ENCODER']}'")
     tqdm.write(f"Parametri addestrabili: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
     return model
 
 class CombinedDiceFocalLoss(nn.Module):
+    # ... (invariato)
     def __init__(self, dice_weight=0.7, focal_weight=0.3, focal_gamma=2.0):
         super().__init__()
-        # FIX: Ponderazione modificata per dare più peso a Dice/IoU
         self.dice = DiceLoss(mode='multiclass', from_logits=True)
         self.focal = FocalLoss(mode='multiclass', gamma=focal_gamma)
         self.dice_weight, self.focal_weight = dice_weight, focal_weight
-
-    def forward(self, pred, target):
-        return self.dice_weight * self.dice(pred, target) + self.focal_weight * self.focal(pred, target)
+    def forward(self, pred, target): return self.dice_weight * self.dice(pred, target) + self.focal_weight * self.focal(pred, target)
 
 def compute_iou(preds, labels, num_classes, ignore_index):
+    # ... (invariato)
     iou_per_class = np.zeros(num_classes)
     for cls in range(num_classes):
         if cls == ignore_index: continue
@@ -214,72 +207,64 @@ def compute_iou(preds, labels, num_classes, ignore_index):
     return np.nanmean(iou_per_class), iou_per_class
 
 def plot_confusion_matrix(conf_matrix_np, class_names, ignore_index):
+    # ... (invariato)
     tqdm.write("Visualizzazione Matrice di Confusione...")
     plot_matrix, plot_names = conf_matrix_np.copy(), class_names.copy()
     if ignore_index is not None:
         plot_matrix = np.delete(np.delete(plot_matrix, ignore_index, axis=0), ignore_index, axis=1)
         plot_names = [name for i, name in enumerate(class_names) if i != ignore_index]
-
     row_sums = plot_matrix.sum(axis=1)[:, np.newaxis]
     norm_conf_matrix = np.divide(plot_matrix, row_sums, out=np.zeros_like(plot_matrix, dtype=float), where=row_sums!=0)
-
-    plt.figure(figsize=(12, 10))
-    sns.heatmap(norm_conf_matrix, annot=True, fmt='.2%', cmap='Blues', xticklabels=plot_names, yticklabels=plot_names)
-    plt.xlabel('Predicted Label', fontsize=12); plt.ylabel('True Label', fontsize=12)
-    plt.title('Matrice di Confusione (Normalizzata per Riga)', fontsize=14); plt.show()
+    plt.figure(figsize=(12, 10)); sns.heatmap(norm_conf_matrix, annot=True, fmt='.2%', cmap='Blues', xticklabels=plot_names, yticklabels=plot_names)
+    plt.xlabel('Predicted Label', fontsize=12); plt.ylabel('True Label', fontsize=12); plt.title('Matrice di Confusione (Normalizzata per Riga)', fontsize=14); plt.show()
 
 # =============================================================================
-# 6. CICLI DI TRAINING E VALIDAZIONE
+# 6. CICLI DI TRAINING E VALIDAZIONE (INVARIATO)
 # =============================================================================
 def train_one_epoch(model, loader, optimizer, criterion, scaler, device, use_amp):
-    model.train()
-    running_loss = 0.0
+    # ... (invariato)
+    model.train(); running_loss = 0.0
     progress_bar = tqdm(loader, desc="Training", leave=False)
     for images, masks in progress_bar:
         images, masks = images.to(device), masks.to(device, dtype=torch.long)
         with autocast(enabled=use_amp, device_type=device.type):
-            outputs = model(images)
-            loss = criterion(outputs, masks)
-        optimizer.zero_grad()
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
-        running_loss += loss.item()
-        progress_bar.set_postfix(loss=f"{loss.item():.4f}")
+            outputs = model(images); loss = criterion(outputs, masks)
+        optimizer.zero_grad(); scaler.scale(loss).backward(); scaler.step(optimizer); scaler.update()
+        running_loss += loss.item(); progress_bar.set_postfix(loss=f"{loss.item():.4f}")
     return running_loss / len(loader)
 
 def evaluate(model, loader, criterion, device, config) -> Tuple[float, float, np.ndarray, np.ndarray]:
-    model.eval()
-    total_loss, all_preds_flat, all_labels_flat = 0.0, [], []
-    # FIX: Calcolo della matrice di confusione memoria-efficiente
+    # ... (invariato)
+    model.eval(); total_loss = 0.0
     conf_matrix = torch.zeros(config["NUM_CLASSES"], config["NUM_CLASSES"], dtype=torch.int64, device=device)
-
     with torch.no_grad():
         for images, masks in tqdm(loader, desc="Validazione", leave=False):
             images, masks = images.to(device), masks.to(device, dtype=torch.long)
             with autocast(enabled=True, device_type=device.type):
-                outputs = model(images)
-                loss = criterion(outputs, masks)
+                outputs = model(images); loss = criterion(outputs, masks)
             total_loss += loss.item()
             preds = torch.argmax(outputs, dim=1)
-            
             masks_flat, preds_flat = masks.flatten(), preds.flatten()
             valid = masks_flat != config["IGNORE_INDEX"]
             indices = masks_flat[valid] * config["NUM_CLASSES"] + preds_flat[valid]
             counts = torch.bincount(indices, minlength=config["NUM_CLASSES"]**2)
             conf_matrix += counts.reshape(config["NUM_CLASSES"], config["NUM_CLASSES"])
-            
-            all_preds_flat.append(preds_flat[valid].cpu())
-            all_labels_flat.append(masks_flat[valid].cpu())
-
-    avg_loss = total_loss / len(loader)
-    all_preds_flat, all_labels_flat = torch.cat(all_preds_flat).numpy(), torch.cat(all_labels_flat).numpy()
-    mean_iou, iou_per_class = compute_iou(all_preds_flat, all_labels_flat, config["NUM_CLASSES"], config["IGNORE_INDEX"])
     
-    return avg_loss, mean_iou, iou_per_class, conf_matrix.cpu().numpy()
+    # Calcolo IoU dalla matrice di confusione (più efficiente)
+    tp = torch.diag(conf_matrix)
+    fp = conf_matrix.sum(axis=0) - tp
+    fn = conf_matrix.sum(axis=1) - tp
+    union = tp + fp + fn
+    iou_per_class = (tp / (union + 1e-6)).cpu().numpy()
+    
+    valid_iou = iou_per_class[1:] # Esclude ignore_index 0
+    mean_iou = np.nanmean(valid_iou)
+
+    return total_loss / len(loader), mean_iou, iou_per_class, conf_matrix.cpu().numpy()
+
 
 # =============================================================================
-# 7. FUNZIONE PRINCIPALE
+# 7. FUNZIONE PRINCIPALE (MODIFICATA PER NUOVA SIGNATURE DI EVALUATE)
 # =============================================================================
 def main():
     config = get_config()
@@ -295,15 +280,15 @@ def main():
     train_dataset = SegmentationDataset(train_dirs, transforms, config)
     val_dataset = SegmentationDataset(val_dirs, transforms, config)
     
-    pin_mem = device.type == 'cuda' # FIX: usa pin_memory solo con GPU
-    train_loader = DataLoader(train_dataset, batch_size=config["BATCH_SIZE"], shuffle=True, num_workers=config["NUM_WORKERS_TRAIN"], pin_memory=pin_mem)
-    val_loader = DataLoader(val_dataset, batch_size=config["BATCH_SIZE"], shuffle=False, num_workers=config["NUM_WORKERS_VAL"], pin_memory=pin_mem)
+    pin_mem = device.type == 'cuda'
+    train_loader = DataLoader(train_dataset, batch_size=config["BATCH_SIZE"], shuffle=True, num_workers=config["NUM_WORKERS"], pin_memory=pin_mem)
+    val_loader = DataLoader(val_dataset, batch_size=config["BATCH_SIZE"], shuffle=False, num_workers=config["NUM_WORKERS"], pin_memory=pin_mem)
 
     model = get_model(config).to(device)
     criterion = CombinedDiceFocalLoss()
     optimizer = optim.Adam(model.parameters(), lr=config["LEARNING_RATE"], weight_decay=config["WEIGHT_DECAY"])
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, 'max', patience=3, factor=0.2, cooldown=2, min_lr=1e-6
+        optimizer, 'max', patience=3, factor=0.2, cooldown=2, min_lr=1e-6, verbose=True
     )
     scaler = GradScaler(enabled=use_amp)
 
@@ -327,7 +312,6 @@ def main():
         if val_miou > best_iou:
             best_iou = val_miou
             best_conf_matrix = val_conf_matrix
-            # FIX: Salvataggio robusto con configurazione inclusa
             save_payload = {'model_state_dict': model.state_dict(), 'config': config}
             torch.save(save_payload, config["MODEL_SAVE_PATH"])
             tqdm.write(f"\n>>> 🎉 Nuovo modello migliore salvato! mIoU: {best_iou:.4f} <<<")
@@ -338,50 +322,10 @@ def main():
     if best_conf_matrix is not None:
         plot_confusion_matrix(best_conf_matrix, config["CLASS_NAMES"], config["IGNORE_INDEX"])
     
-    tqdm.write("\nAnalisi finale completata. Per eseguire le predizioni su nuovi dati, usare uno script separato "
-               "caricando i pesi da 'best_model.pth' e implementando la funzione predict(X).")
+    tqdm.write("\nAnalisi finale completata. Per eseguire le predizioni su nuovi dati, usare uno script separato.")
 
 # =============================================================================
 # 8. ESECUZIONE
 # =============================================================================
 if __name__ == "__main__":
     main()
-
-
-'''
-Traceback (most recent call last):                                                                                                                                                
-  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\3 - Loss\6 - new_baseline_2.py", line 348, in <module>
-    main()
-  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\3 - Loss\6 - new_baseline_2.py", line 316, in main
-    train_loss = train_one_epoch(model, train_loader, optimizer, criterion, scaler, device, use_amp)
-                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\3 - Loss\6 - new_baseline_2.py", line 238, in train_one_epoch
-    for images, masks in progress_bar:
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\tqdm\std.py", line 1181, in __iter__
-    for obj in iterable:
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\dataloader.py", line 733, in __next__
-    data = self._next_data()
-           ^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\dataloader.py", line 1515, in _next_data
-    return self._process_data(data, worker_id)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\dataloader.py", line 1550, in _process_data
-    data.reraise()
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\_utils.py", line 750, in reraise
-    raise exception
-TypeError: Caught TypeError in DataLoader worker process 0.
-Original Traceback (most recent call last):
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\_utils\worker.py", line 349, in _worker_loop
-    data = fetcher.fetch(index)  # type: ignore[possibly-undefined]
-           ^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\_utils\fetch.py", line 55, in fetch
-    return self.collate_fn(data)
-           ^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\_utils\collate.py", line 398, in default_collate
-    return collate(batch, collate_fn_map=default_collate_fn_map)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\_utils\collate.py", line 240, in collate
-    raise TypeError(default_collate_err_msg_format.format(elem_type))
-TypeError: default_collate: batch must contain tensors, numpy arrays, numbers, dicts or lists; found <class 'dict_values'>
-
-'''
