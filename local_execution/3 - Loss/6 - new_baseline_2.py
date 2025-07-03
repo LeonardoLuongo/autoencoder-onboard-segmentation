@@ -333,3 +333,45 @@ def main():
 # =============================================================================
 if __name__ == "__main__":
     main()
+
+'''
+ & "C:/Program Files/Python312/python.exe" "d:/MLPoject-Git/autoencoder-onboard-segmentation/local_execution/3 - Loss/6 - new_baseline_2.py"
+Device: cuda | Mixed Precision: True
+Production Run: efficientnet-b2 con pipeline dati professionale
+Caricamento percorsi dei dataset...
+Trovati 931 campioni in 'original'.
+Trovati 561 campioni in 'augmented'.
+Trovati 1960 campioni in 'aggressive'.
+Calcolo Hash: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 3452/3452 [00:17<00:00, 196.30it/s]
+Traceback (most recent call last):
+  File "C:\Program Files\Python312\Lib\site-packages\networkx\convert.py", line 172, in to_networkx_graph
+    return from_edgelist(data, create_using=create_using)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<class 'networkx.utils.decorators.argmap'> compilation 4", line 3, in argmap_from_edgelist_1
+  File "C:\Program Files\Python312\Lib\site-packages\networkx\utils\backends.py", line 633, in __call__
+    return self.orig_func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\Python312\Lib\site-packages\networkx\convert.py", line 493, in from_edgelist
+    G.add_edges_from(edgelist)
+  File "C:\Program Files\Python312\Lib\site-packages\networkx\classes\graph.py", line 1031, in add_edges_from
+    raise NetworkXError(f"Edge tuple {e} must be a 2-tuple or 3-tuple.")
+networkx.exception.NetworkXError: Edge tuple {'./dataset/training/train\\0002', './dataset/training/augmented\\0002_aug_class5', './dataset/training/augmented_aggressive\\0002_variant4_aug_class5', './dataset/training/augmented_aggressive\\0002_variant2_aug_class5'} must be a 2-tuple or 3-tuple.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\3 - Loss\6 - new_baseline_2.py", line 335, in <module>
+    main()
+  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\3 - Loss\6 - new_baseline_2.py", line 280, in main
+    train_dirs, val_dirs = get_grouped_stratified_split(config)
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\3 - Loss\6 - new_baseline_2.py", line 123, in get_grouped_stratified_split
+    G = nx.Graph(list(nx.connected_components(nx.from_edgelist(
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\Python312\Lib\site-packages\networkx\classes\graph.py", line 371, in __init__
+    convert.to_networkx_graph(incoming_graph_data, create_using=self)
+  File "C:\Program Files\Python312\Lib\site-packages\networkx\convert.py", line 174, in to_networkx_graph
+    raise nx.NetworkXError("Input is not a valid edge list") from err
+networkx.exception.NetworkXError: Input is not a valid edge list
+
+'''
