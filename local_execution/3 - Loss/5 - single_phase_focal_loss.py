@@ -50,7 +50,7 @@ def get_config() -> Dict[str, Any]:
         "RARE_BOOST_FACTOR": 5.0, # Moltiplicatore per il peso delle classi rare
         
         # Parametri del modello
-        "ENCODER": "efficientnet-b2",
+        "ENCODER": "efficientnet-b3",
         "ENCODER_WEIGHTS": "imagenet",
         "NUM_CLASSES": 9,
         "IGNORE_INDEX": 0,
@@ -186,7 +186,7 @@ def calculate_class_weights(dataset: Dataset, config: Dict[str, Any]) -> torch.T
     num_classes = config["NUM_CLASSES"]
     pixel_counts = np.zeros(num_classes, dtype=np.int64)
     
-    loader = DataLoader(dataset, batch_size=config["BATCH_SIZE"], num_workers=config["NUM_WORKERS"])
+    loader = DataLoader(dataset, batch_size=config["BATCH_SIZE"], num_workers=config["NUM_WORKERS_TRAIN"])
     for _, masks in tqdm(loader, desc="Analisi distribuzione pixel"):
         for mask in masks:
             pixel_counts += np.bincount(mask.flatten(), minlength=num_classes)
@@ -380,14 +380,14 @@ def main():
         train_dataset, 
         batch_size=config["BATCH_SIZE"], 
         shuffle=True,
-        num_workers=config["NUM_WORKERS"], 
+        num_workers=config["NUM_WORKERS_TRAIN"], 
         pin_memory=True
     )
     val_loader = DataLoader(
         val_dataset, 
         batch_size=config["BATCH_SIZE"], 
         shuffle=False,
-        num_workers=config["NUM_WORKERS"], 
+        num_workers=config["NUM_WORKERS_VAL"], 
         pin_memory=True
     )
 
@@ -404,7 +404,7 @@ def main():
     
     # Li combiniamo
     def combined_loss(pred, target):
-        return 0.5 * criterion_dice(pred, target) + 0.5 * criterion_focal(pred, target)
+        return 0.7 * criterion_dice(pred, target) + 0.3 * criterion_focal(pred, target)
     
     # Ottimizzatore
     optimizer = optim.Adam(model.parameters(), lr=config["LEARNING_RATE"], weight_decay=config["WEIGHT_DECAY"])
