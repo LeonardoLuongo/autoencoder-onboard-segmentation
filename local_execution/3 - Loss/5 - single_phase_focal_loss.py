@@ -465,3 +465,475 @@ def main():
 # =============================================================================
 if __name__ == "__main__":
     main()
+
+'''
+> & "C:/Program Files/Python312/python.exe" "d:/MLPoject-Git/autoencoder-onboard-segmentation/local_execution/3 - Loss/5 - single_phase_focal_loss.py"
+Device: cuda | Mixed Precision: True
+Caricamento percorsi dei dataset...
+Trovati 931 campioni originali.
+Trovati 561 campioni aumentati.
+Trovati 1960 campioni aumentati aggressivamente.
+Dimensione totale del dataset di training (originale + aumentato): 3452 campioni.
+Trovati 2475 gruppi di immagini.                                                                                                                                                  
+Split stratificato basato su gruppi creato: 2805 train, 647 validation.                                                                                                           
+Creazione del modello: U-Net con encoder 'efficientnet-b2'
+Parametri addestrabili del modello: 10,047,451
+
+--- Inizio Addestramento (Strategia Bilanciata) ---
+
+--- Epoch 1/30 ---
+d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\3 - Loss\5 - single_phase_focal_loss.py:344: RuntimeWarning: Mean of empty slice                                 
+  iou_per_class = np.nanmean(np.array(iou_list_per_image), axis=0)
+Risultati Epoch 1:
+  - Training Loss: 1.0992 | Validation Loss: 0.7836 | Validation mIoU: 0.0133
+  - IoU per Classe (Validation):
+    - Classe 1: 0.0020
+    - Classe 2: 0.0012
+    - Classe 3: 0.0007
+    - Classe 4: 0.0004
+    - Classe 5: 0.0031
+    - Classe 6: 0.0001
+    - Classe 7: 0.0942
+    - Classe 8: 0.0049
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.0133 <<<
+
+
+--- Epoch 2/30 ---
+Risultati Epoch 2:                                                                                                                                                                
+  - Training Loss: 0.6867 | Validation Loss: 0.5679 | Validation mIoU: 0.0237
+  - IoU per Classe (Validation):
+    - Classe 1: 0.0015
+    - Classe 2: 0.0054
+    - Classe 3: 0.0009
+    - Classe 4: 0.0000
+    - Classe 5: 0.0000
+    - Classe 6: 0.0004
+    - Classe 7: 0.1796
+    - Classe 8: 0.0017
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.0237 <<<
+
+
+--- Epoch 3/30 ---
+Risultati Epoch 3:                                                                                                                                                                
+  - Training Loss: 0.5836 | Validation Loss: 0.5093 | Validation mIoU: 0.0913
+  - IoU per Classe (Validation):
+    - Classe 1: 0.0011
+    - Classe 2: 0.0932
+    - Classe 3: 0.0049
+    - Classe 4: 0.0000
+    - Classe 5: 0.0000
+    - Classe 6: 0.0873
+    - Classe 7: 0.2734
+    - Classe 8: 0.2708
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.0913 <<<
+
+
+--- Epoch 4/30 ---
+Risultati Epoch 4:                                                                                                                                                                
+  - Training Loss: 0.5408 | Validation Loss: 0.5083 | Validation mIoU: 0.1088
+  - IoU per Classe (Validation):
+    - Classe 1: 0.1180
+    - Classe 2: 0.1416
+    - Classe 3: 0.0195
+    - Classe 4: 0.0000
+    - Classe 5: 0.0001
+    - Classe 6: 0.0223
+    - Classe 7: 0.2499
+    - Classe 8: 0.3194
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.1088 <<<
+
+
+--- Epoch 5/30 ---
+Risultati Epoch 5:                                                                                                                                                                
+  - Training Loss: 0.5285 | Validation Loss: 0.4869 | Validation mIoU: 0.1142
+  - IoU per Classe (Validation):
+    - Classe 1: 0.0495
+    - Classe 2: 0.1295
+    - Classe 3: 0.0075
+    - Classe 4: 0.0000
+    - Classe 5: 0.1123
+    - Classe 6: 0.1084
+    - Classe 7: 0.2002
+    - Classe 8: 0.3065
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.1142 <<<
+
+
+--- Epoch 6/30 ---
+Risultati Epoch 6:                                                                                                                                                                
+  - Training Loss: 0.5068 | Validation Loss: 0.5186 | Validation mIoU: 0.1279
+  - IoU per Classe (Validation):
+    - Classe 1: 0.0727
+    - Classe 2: 0.0452
+    - Classe 3: 0.0424
+    - Classe 4: 0.0000
+    - Classe 5: 0.1843
+    - Classe 6: 0.0799
+    - Classe 7: 0.2623
+    - Classe 8: 0.3359
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.1279 <<<
+
+
+--- Epoch 7/30 ---
+Risultati Epoch 7:                                                                                                                                                                
+  - Training Loss: 0.4935 | Validation Loss: 0.4703 | Validation mIoU: 0.1580
+  - IoU per Classe (Validation):
+    - Classe 1: 0.1836
+    - Classe 2: 0.1706
+    - Classe 3: 0.0813
+    - Classe 4: 0.0000
+    - Classe 5: 0.1611
+    - Classe 6: 0.0785
+    - Classe 7: 0.2289
+    - Classe 8: 0.3597
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.1580 <<<
+
+
+--- Epoch 8/30 ---
+Risultati Epoch 8:                                                                                                                                                                
+  - Training Loss: 0.4827 | Validation Loss: 0.4264 | Validation mIoU: 0.1856
+  - IoU per Classe (Validation):
+    - Classe 1: 0.1529
+    - Classe 2: 0.1943
+    - Classe 3: 0.0983
+    - Classe 4: 0.0404
+    - Classe 5: 0.2629
+    - Classe 6: 0.0587
+    - Classe 7: 0.2820
+    - Classe 8: 0.3957
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.1856 <<<
+
+
+--- Epoch 9/30 ---
+Risultati Epoch 9:                                                                                                                                                                
+  - Training Loss: 0.4631 | Validation Loss: 0.4549 | Validation mIoU: 0.1927
+  - IoU per Classe (Validation):
+    - Classe 1: 0.1616
+    - Classe 2: 0.1731
+    - Classe 3: 0.0516
+    - Classe 4: 0.1168
+    - Classe 5: 0.2551
+    - Classe 6: 0.0541
+    - Classe 7: 0.3285
+    - Classe 8: 0.4007
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.1927 <<<
+
+
+--- Epoch 10/30 ---
+Risultati Epoch 10:                                                                                                                                                               
+  - Training Loss: 0.4457 | Validation Loss: 0.4187 | Validation mIoU: 0.1938
+  - IoU per Classe (Validation):
+    - Classe 1: 0.1021
+    - Classe 2: 0.1059
+    - Classe 3: 0.1366
+    - Classe 4: 0.1219
+    - Classe 5: 0.2702
+    - Classe 6: 0.1321
+    - Classe 7: 0.2886
+    - Classe 8: 0.3931
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.1938 <<<
+
+
+--- Epoch 11/30 ---
+Risultati Epoch 11:                                                                                                                                                               
+  - Training Loss: 0.4281 | Validation Loss: 0.4465 | Validation mIoU: 0.1856
+  - IoU per Classe (Validation):
+    - Classe 1: 0.0702
+    - Classe 2: 0.1130
+    - Classe 3: 0.1266
+    - Classe 4: 0.1487
+    - Classe 5: 0.2035
+    - Classe 6: 0.1190
+    - Classe 7: 0.3289
+    - Classe 8: 0.3752
+
+--- Epoch 12/30 ---
+Risultati Epoch 12:                                                                                                                                                               
+  - Training Loss: 0.4164 | Validation Loss: 0.4221 | Validation mIoU: 0.2175
+  - IoU per Classe (Validation):
+    - Classe 1: 0.0782
+    - Classe 2: 0.1335
+    - Classe 3: 0.1535
+    - Classe 4: 0.2787
+    - Classe 5: 0.2279
+    - Classe 6: 0.1070
+    - Classe 7: 0.3259
+    - Classe 8: 0.4351
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.2175 <<<
+
+
+--- Epoch 13/30 ---
+Risultati Epoch 13:                                                                                                                                                               
+  - Training Loss: 0.4006 | Validation Loss: 0.4474 | Validation mIoU: 0.2037
+  - IoU per Classe (Validation):
+    - Classe 1: 0.1400
+    - Classe 2: 0.1509
+    - Classe 3: 0.1346
+    - Classe 4: 0.1717
+    - Classe 5: 0.2695
+    - Classe 6: 0.0872
+    - Classe 7: 0.3461
+    - Classe 8: 0.3297
+
+--- Epoch 14/30 ---
+Risultati Epoch 14:                                                                                                                                                               
+  - Training Loss: 0.3973 | Validation Loss: 0.4351 | Validation mIoU: 0.2088
+  - IoU per Classe (Validation):
+    - Classe 1: 0.1045
+    - Classe 2: 0.1468
+    - Classe 3: 0.1448
+    - Classe 4: 0.1867
+    - Classe 5: 0.2956
+    - Classe 6: 0.0804
+    - Classe 7: 0.3241
+    - Classe 8: 0.3871
+
+--- Epoch 15/30 ---
+Risultati Epoch 15:                                                                                                                                                               
+  - Training Loss: 0.3873 | Validation Loss: 0.3950 | Validation mIoU: 0.2513
+  - IoU per Classe (Validation):
+    - Classe 1: 0.2008
+    - Classe 2: 0.1706
+    - Classe 3: 0.1182
+    - Classe 4: 0.3041
+    - Classe 5: 0.3071
+    - Classe 6: 0.1030
+    - Classe 7: 0.3646
+    - Classe 8: 0.4420
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.2513 <<<
+
+
+--- Epoch 16/30 ---
+Risultati Epoch 16:                                                                                                                                                               
+  - Training Loss: 0.3670 | Validation Loss: 0.4369 | Validation mIoU: 0.2564
+  - IoU per Classe (Validation):
+    - Classe 1: 0.1000
+    - Classe 2: 0.1946
+    - Classe 3: 0.1663
+    - Classe 4: 0.3848
+    - Classe 5: 0.3277
+    - Classe 6: 0.0834
+    - Classe 7: 0.3775
+    - Classe 8: 0.4172
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.2564 <<<
+
+
+--- Epoch 17/30 ---
+Risultati Epoch 17:                                                                                                                                                               
+  - Training Loss: 0.3600 | Validation Loss: 0.3839 | Validation mIoU: 0.2692
+  - IoU per Classe (Validation):
+    - Classe 1: 0.2087
+    - Classe 2: 0.1767
+    - Classe 3: 0.1455
+    - Classe 4: 0.4044
+    - Classe 5: 0.3411
+    - Classe 6: 0.0950
+    - Classe 7: 0.3655
+    - Classe 8: 0.4167
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.2692 <<<
+
+
+--- Epoch 18/30 ---
+Risultati Epoch 18:                                                                                                                                                               
+  - Training Loss: 0.3413 | Validation Loss: 0.6341 | Validation mIoU: 0.2096
+  - IoU per Classe (Validation):
+    - Classe 1: 0.1492
+    - Classe 2: 0.1639
+    - Classe 3: 0.1331
+    - Classe 4: 0.3322
+    - Classe 5: 0.2953
+    - Classe 6: 0.0250
+    - Classe 7: 0.2564
+    - Classe 8: 0.3217
+
+--- Epoch 19/30 ---
+Risultati Epoch 19:                                                                                                                                                               
+  - Training Loss: 0.3477 | Validation Loss: 0.3936 | Validation mIoU: 0.3023
+  - IoU per Classe (Validation):
+    - Classe 1: 0.2381
+    - Classe 2: 0.1995
+    - Classe 3: 0.1515
+    - Classe 4: 0.4561
+    - Classe 5: 0.3764
+    - Classe 6: 0.1035
+    - Classe 7: 0.4243
+    - Classe 8: 0.4690
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.3023 <<<
+
+
+--- Epoch 20/30 ---
+Risultati Epoch 20:                                                                                                                                                               
+  - Training Loss: 0.3221 | Validation Loss: 0.3823 | Validation mIoU: 0.3008
+  - IoU per Classe (Validation):
+    - Classe 1: 0.2324
+    - Classe 2: 0.1958
+    - Classe 3: 0.1546
+    - Classe 4: 0.4435
+    - Classe 5: 0.3876
+    - Classe 6: 0.1065
+    - Classe 7: 0.4124
+    - Classe 8: 0.4736
+
+--- Epoch 21/30 ---
+Risultati Epoch 21:                                                                                                                                                               
+  - Training Loss: 0.3098 | Validation Loss: 0.3890 | Validation mIoU: 0.2931
+  - IoU per Classe (Validation):
+    - Classe 1: 0.2203
+    - Classe 2: 0.2194
+    - Classe 3: 0.1620
+    - Classe 4: 0.3934
+    - Classe 5: 0.3875
+    - Classe 6: 0.1110
+    - Classe 7: 0.4046
+    - Classe 8: 0.4467
+
+--- Epoch 22/30 ---
+Risultati Epoch 22:                                                                                                                                                               
+  - Training Loss: 0.2953 | Validation Loss: 0.3960 | Validation mIoU: 0.3217
+  - IoU per Classe (Validation):
+    - Classe 1: 0.2685
+    - Classe 2: 0.2291
+    - Classe 3: 0.1821
+    - Classe 4: 0.4855
+    - Classe 5: 0.3874
+    - Classe 6: 0.1229
+    - Classe 7: 0.4431
+    - Classe 8: 0.4551
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.3217 <<<
+
+
+--- Epoch 23/30 ---
+Risultati Epoch 23:                                                                                                                                                               
+  - Training Loss: 0.2811 | Validation Loss: 0.3872 | Validation mIoU: 0.3321
+  - IoU per Classe (Validation):
+    - Classe 1: 0.2750
+    - Classe 2: 0.2366
+    - Classe 3: 0.1727
+    - Classe 4: 0.5253
+    - Classe 5: 0.4129
+    - Classe 6: 0.1124
+    - Classe 7: 0.4456
+    - Classe 8: 0.4767
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.3321 <<<
+
+
+--- Epoch 24/30 ---
+Risultati Epoch 24:                                                                                                                                                               
+  - Training Loss: 0.2709 | Validation Loss: 0.3758 | Validation mIoU: 0.3308
+  - IoU per Classe (Validation):
+    - Classe 1: 0.2757
+    - Classe 2: 0.2515
+    - Classe 3: 0.1847
+    - Classe 4: 0.4505
+    - Classe 5: 0.4352
+    - Classe 6: 0.1105
+    - Classe 7: 0.4615
+    - Classe 8: 0.4763
+
+--- Epoch 25/30 ---
+Risultati Epoch 25:                                                                                                                                                               
+  - Training Loss: 0.2606 | Validation Loss: 0.3869 | Validation mIoU: 0.3483
+  - IoU per Classe (Validation):
+    - Classe 1: 0.2831
+    - Classe 2: 0.2481
+    - Classe 3: 0.1975
+    - Classe 4: 0.5553
+    - Classe 5: 0.4512
+    - Classe 6: 0.1057
+    - Classe 7: 0.4467
+    - Classe 8: 0.4984
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.3483 <<<
+
+
+--- Epoch 26/30 ---
+Risultati Epoch 26:                                                                                                                                                               
+  - Training Loss: 0.2507 | Validation Loss: 0.3843 | Validation mIoU: 0.3446
+  - IoU per Classe (Validation):
+    - Classe 1: 0.2915
+    - Classe 2: 0.2554
+    - Classe 3: 0.2040
+    - Classe 4: 0.5027
+    - Classe 5: 0.4460
+    - Classe 6: 0.1196
+    - Classe 7: 0.4525
+    - Classe 8: 0.4850
+
+--- Epoch 27/30 ---
+Risultati Epoch 27:                                                                                                                                                               
+  - Training Loss: 0.2453 | Validation Loss: 0.3806 | Validation mIoU: 0.3497
+  - IoU per Classe (Validation):
+    - Classe 1: 0.2874
+    - Classe 2: 0.2432
+    - Classe 3: 0.2005
+    - Classe 4: 0.5559
+    - Classe 5: 0.4512
+    - Classe 6: 0.1148
+    - Classe 7: 0.4493
+    - Classe 8: 0.4958
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.3497 <<<
+
+
+--- Epoch 28/30 ---
+Risultati Epoch 28:                                                                                                                                                               
+  - Training Loss: 0.2391 | Validation Loss: 0.3961 | Validation mIoU: 0.3536
+  - IoU per Classe (Validation):
+    - Classe 1: 0.3008
+    - Classe 2: 0.2505
+    - Classe 3: 0.2013
+    - Classe 4: 0.5534
+    - Classe 5: 0.4558
+    - Classe 6: 0.1148
+    - Classe 7: 0.4529
+    - Classe 8: 0.4993
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.3536 <<<
+
+
+--- Epoch 29/30 ---
+Risultati Epoch 29:                                                                                                                                                               
+  - Training Loss: 0.2383 | Validation Loss: 0.3916 | Validation mIoU: 0.3517
+  - IoU per Classe (Validation):
+    - Classe 1: 0.3025
+    - Classe 2: 0.2505
+    - Classe 3: 0.2026
+    - Classe 4: 0.5393
+    - Classe 5: 0.4572
+    - Classe 6: 0.1159
+    - Classe 7: 0.4471
+    - Classe 8: 0.4982
+
+--- Epoch 30/30 ---
+Risultati Epoch 30:                                                                                                                                                               
+  - Training Loss: 0.2372 | Validation Loss: 0.3990 | Validation mIoU: 0.3503
+  - IoU per Classe (Validation):
+    - Classe 1: 0.3007
+    - Classe 2: 0.2532
+    - Classe 3: 0.2011
+    - Classe 4: 0.5356
+    - Classe 5: 0.4480
+    - Classe 6: 0.1199
+    - Classe 7: 0.4493
+    - Classe 8: 0.4944
+
+--- Addestramento Completato ---
+Miglior mIoU di validazione ottenuto: 0.3536
+
+'''
