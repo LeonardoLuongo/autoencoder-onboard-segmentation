@@ -16,7 +16,7 @@ from torch.utils.data import Dataset, DataLoader
 
 # Import AMP retro-compatibile e robusto
 try:
-    from torch.cuda.amp import GradScaler, autocast
+    from torch.amp import GradScaler, autocast
     AMP_AVAILABLE = True
 except ImportError:
     AMP_AVAILABLE = False
@@ -179,7 +179,7 @@ class SegmentationDataset(Dataset):
         assert mask.dtype == np.uint8, f"Tipo maschera non corretto: {mask.dtype}"
         assert mask.max() < self.config["NUM_CLASSES"], f"ID classe non valido in {os.path.join(sample_dir, 'labels.png')}"
             
-        return self.transform(image=image, mask=mask).values()
+        return tuple(self.transform(image=image, mask=mask).values())
 
 # =============================================================================
 # 5. MODELLO, LOSS E METRICHE
@@ -347,41 +347,466 @@ def main():
 if __name__ == "__main__":
     main()
 
-
 '''
-Traceback (most recent call last):                                                                                                                                                
-  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\3 - Loss\6 - new_baseline_2.py", line 348, in <module>
-    main()
-  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\3 - Loss\6 - new_baseline_2.py", line 316, in main
-    train_loss = train_one_epoch(model, train_loader, optimizer, criterion, scaler, device, use_amp)
-                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\3 - Loss\6 - new_baseline_2.py", line 238, in train_one_epoch
-    for images, masks in progress_bar:
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\tqdm\std.py", line 1181, in __iter__
-    for obj in iterable:
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\dataloader.py", line 733, in __next__
-    data = self._next_data()
-           ^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\dataloader.py", line 1515, in _next_data
-    return self._process_data(data, worker_id)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\dataloader.py", line 1550, in _process_data
-    data.reraise()
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\_utils.py", line 750, in reraise
-    raise exception
-TypeError: Caught TypeError in DataLoader worker process 0.
-Original Traceback (most recent call last):
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\_utils\worker.py", line 349, in _worker_loop
-    data = fetcher.fetch(index)  # type: ignore[possibly-undefined]
-           ^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\_utils\fetch.py", line 55, in fetch
-    return self.collate_fn(data)
-           ^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\_utils\collate.py", line 398, in default_collate
-    return collate(batch, collate_fn_map=default_collate_fn_map)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\_utils\collate.py", line 240, in collate
-    raise TypeError(default_collate_err_msg_format.format(elem_type))
-TypeError: default_collate: batch must contain tensors, numpy arrays, numbers, dicts or lists; found <class 'dict_values'>
+
+Etichettatura gruppi per lo split: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████| 2475/2475 [00:24<00:00, 99.67it/s] 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Split stratificato creato: 2779 train, 673 validation.
+Creazione del modello: U-Net con encoder 'efficientnet-b2'
+Parametri addestrabili: 10,047,451
+
+--- Inizio Training ---
+
+--- Epoch 1/30 ---
+Risultati Epoch 1:                                                                                                                                                                
+  - Train Loss: 0.7209 | Val Loss: 0.5485 | Val mIoU: 0.1905
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.0025
+    - Classe 2 (Rough): 0.0956
+    - Classe 3 (Smooth): 0.0004
+    - Classe 4 (Grass): 0.0000
+    - Classe 5 (HighVeg): 0.0201
+    - Classe 6 (LowVeg): 0.2330
+    - Classe 7 (Puddle): 0.6336
+    - Classe 8 (Obstacle): 0.7296
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.1905 <<<
+
+--- Epoch 2/30 ---
+  - Train Loss: 0.5885 | Val Loss: 0.5098 | Val mIoU: 0.3175
+  - Train Loss: 0.5885 | Val Loss: 0.5098 | Val mIoU: 0.3175
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.4298
+    - Classe 2 (Rough): 0.3439
+    - Classe 1 (Sky): 0.4298
+    - Classe 2 (Rough): 0.3439
+    - Classe 3 (Smooth): 0.0002
+    - Classe 4 (Grass): 0.0000
+    - Classe 5 (HighVeg): 0.2928
+    - Classe 6 (LowVeg): 0.2118
+    - Classe 7 (Puddle): 0.7491
+    - Classe 8 (Obstacle): 0.8301
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.3175 <<<
+
+--- Epoch 3/30 ---
+Training:  47%|██████████████████████████████████████████████████████                                                             | 327/695 [01:16<01:10,  5.22it/s, loss=0.5497]
+Training:  47%|██████████████████████████████████████████████████████                                                             | 327/690.44Training:  47%|██████████████████████████████████████████████████████▎                                                            | 32Training:  47%|██████████████████████████████████████████████████████                                                             | 327/69=0.44Training:  47%|██████████████████████████████████████████████████████▎                                                            | 3 losTraining:  47%|██████████████████████████████████████████████████████▎                                                            | 32, loss=0Training:  47%|██████████████████████████████████████████████████████▍                                                            it/s, loTraining:  47%|██████████████████████████████████████████████████████▍                                                            10it/s, loss=Training:  47%|██████████████████████████████████████████████████████▌                                                       ,  5.02it/s, loss=Training:  47%|██████████████████████████████████████████████████████▌                                                  01:12,  5.02it/s, loss=Training:  48%|██████████████████████████████████████████████████████▊                                             ,  5.02it/s, loss=Training:  47%|██████████████████████████████████████████████████████▌                                                  <01:12,  5.02it/s, loss=Training:  48%|██████████████████████████████████████████████████████▊                                            [01:17<01:11,  5.06it/s, loss=Training:  48%|██████████████████████████████████████████████████████▊                                       331/695 [01:17<01:11,  5.06it/s, loss=Training:  48%|██████████████████████████████████████████████████████▉                                     | 332/695 [01:17<01:10,  5.14it/s, loss=Training:  48%|██████████████████████████████████████████████████████▉                                     | 332/695 [01:17<01:10,  5.14it/s, loss=Training:  48%|███████████████████████████████████████████████████████                 | 332/695 [01:17<01:10,  5.14it/s, loss=Training:  48%|██████████████████████████████████████████████████████▉                                      | 332/695 [01:17<01:10,  5.14it/s, loss=Training:  48%|███████████████████████████████████████████████████████                                      | 333/695 [01:17<01:09,  5.18it/s, loss=Training:  48%|███████████████████████████████████████████████████████                                         | 333/695 [01:17<01:09,  5.18it/s, loss=Training:  48%|████████████████████████████████████████████                                                    | 334/695 [01:17<01:09,  5.23it/s, loss=Training:  48%|████████████████████████████████████▎                                                           | 334/695 [01:17<01:09,  5.23it/s, loss=Training:  48%|██████████████████                                                  | 334/695 [01:17<01:09,  5.23it/s, loss=Training:  48%|███████████████████████████████████████▎                                                           | 334/695 [01:17<01:09,  5.23it/s, loss=Training:  48%|███████████████████████████████████████▍                                                           | 335/695 [01:17<01:12, Training:  48%|███████████████████████████████████████▍                                                           | 335/695 [01:18<01:12,  4.98it/s, lossTraining:  48%|██████████████████████▍                                                           | 335/695 [01:17<01:12, Training:  48%|█████████████████████████████████████████▍                                                           | 335/695 [01:18<01:12,  4.98it/s, lossTraining:  48%|█████████████████████████████████████████▌                                                           | 336/6Training:  48%|█████████████████████████████████████████▌                                                           | 336/695 [01:18<01:11,  5.03it/s, loTraining:  48%|█████████████████████████████████████████▊                                                           | 337Training:  48%|█████████████████████████████████████████▊                                                           | 337/695 [01:18<01:12,  4.91it/s, Training:  49%|█████████████████████████████████████████████▊                                                           | 337Training:  48%|██████████████████████████████████████████████████████████▊                                                           | 337Training:  48%|██████████████████████████████████████████████████████████▊                                                           | 337Training:  48%|██████████████████████████████████████████████████████████▊                                                           | 337Training:  48%|███████████████████████████████████████████████████▊                                                           | 337/695 [01:18<01:12,  4.91it/s, Training:  ███████████████████████████████████████████████████████▉                                                           | 338/695 [01:18<01Trai:  49%|███████████████████████████████████████████████████████▉                                                           | 338/695 [01:18█████████████████████████████████████████████████▉                                                           | 338/695 [01:18<01Training: %|███████████████████████████████████████████████████████▉                                                           | 338/695 [01:18<01:1 4.84it/s,Training:  49%|████████████████████████████████████████████████████████                                                          Training:  49%|████████████████████████████████████████████████████████                                                           | 339/6 4.84it/s,Training:  49%|████████████████████████████████████████████████████████                                                           | Training:  49%|████████████████████████████████████████████████████████                                                           | 339/695 [01:18<01:14,  4.78it/Training:  49%|████████████████████████████████████████████████████████▎                                                          Training:  49%|████████████████████████████████████████████████████████▎                                              695 [01:18<01:14,  4.78it/Training:  49%|████████████████████████████████████████████████████████▎                                                          Training:  49%|████████████████████████████████████████████████████████▎                                                          | 340/695 [01:19<01:13,  4.82iTraining:  49%|████████████████████████████████████████████████████████▍                                                        Training:  49%|████████████████████████████████████████████████████████▍                                                          | 341/695 [01:19<01:12,  4.8Training:  49%|████████████████████████████████████████████████████████▌                                      Training:  49%|████████████████████████████████████████████████████████▌                                                          | 342/695 [01:19<01:12,  Training:  49%|████████████████████████████████████████████████████████▊                                   Training:  49%|████████████████████████████████████████████████████████▊                                                          | 343/695 [01:19<01:12Training:  49%|████████████████████████████████████████████████████████▉                                                          | 344/695 [01:19<01:12Training:  49%|████████████████████████████████████████████████████████▉                                                          | 344/695 [01:19<01:12Training:  50%|█████████████████████████Training:  50%|█████████████████████████████████████████████████████████                                                          | 345/695 [01:2Training:  50%|█████████████████████████████████████████████████████████▎        Training:  50%|█████████████████████████████████████████████████████████▎                                                         | 346/695 [Training:  50%|█████████████████████████████████████████████████████████▍                                    Training:  50%|█████████████████████████████████████████████████████████▍                                                         | 347/695Training:  50%|█████████████████████████████████████████████████████████▌                                                  Training:  50%|█████████████████████████████████████████████████████████▌                                                         | 348/69Training:  50%|█████████████████████████████████████████████████████████▋                                                         | 349/69Training:  50%|█████████████████████████████████████████████████████████▋                                                         | 349/69Training:  50%|█████████████████████████████████████████████████████████▉                                                         | 350/69Training:  50%|█████████████████████████████████████████████████████████▉                                                         | 350/69Training:  51%|██████████████████████████████████████████████████████████                                                         | 351/695 [Training:  51%|██████████████████████████████████████████████████████████▋                             Risultati Epoch 3:
+  - Train Loss: 0.5532 | Val Loss: 0.4983 | Val mIoU: 0.3497
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.4445
+    - Classe 2 (Rough): 0.3528
+    - Classe 3 (Smooth): 0.0275
+    - Classe 4 (Grass): 0.0000
+    - Classe 5 (HighVeg): 0.4501
+    - Classe 6 (LowVeg): 0.2598
+    - Classe 7 (Puddle): 0.7661
+    - Classe 8 (Obstacle): 0.8467
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.3497 <<<
+
+--- Epoch 4/30 ---
+Risultati Epoch 4:                                                                                Risultati Epoch 4:
+  - Train Loss: 0.5255 | Val Loss: 0.4715 | Val mIoU: 0.3524
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.4270
+    - Classe 2 (Rough): 0.3896
+    - Classe 3 (Smooth): 0.0198
+    - Classe 4 (Grass): 0.0001
+    - Classe 5 (HighVeg): 0.5155
+    - Classe 6 (LowVeg): 0.2818
+    - Classe 7 (Puddle): 0.6848
+    - Classe 8 (Obstacle): 0.8527
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.3524 <<<
+
+--- Epoch 5/30 ---
+Training:  94%|███████████████████████████████████████████████████████████████████████████████████Training:  94%|███████████████████████████████████████████████████████████████████████████████████Training:  94%|███████████████████████████████████████████████████████████████████████████████████Training:  94%|███████████████████████████████████████████████████████████████████████████████████Training:  94%|███████████████████████████████████████████████████████████████████████████████████Training:  94%|███████████████████████████████████████████████████████████████████████████████████Training:  95%|███████████████████████████████████████████████████████████████████████████████████Training:  95%|███████████████████████████████████████████████████████████████████████████████████Training:  95%|███████████████████████████████████████████████████████████████████████████████████Training:  95%|███████████████████████████████████████████████████████████████████████████████████Training:  95%|███████████████████████████████████████████████████████████████████████████████████Training:  95%|███████████████████████████████████████████████████████████████████████████████████Training:  95%|███████████████████████████████████████████████████████████████████████████████████Training:  95%|███████████████████████████████████████████████████████████████████████████████████Training:  95%|███████████████████████████████████████████████████████████████████████████████████Training:  95%|███████████████████████████████████████████████████████████████████████████████████Training:  95%|███████████████████████████████████████████████████████████████████████████████████Training:  95%|███████████████████████████████████████████████████████████████████████████████████Training:  95%|███████████████████████████████████████████████████████████████████████████████████Training:  95%|███████████████████████████████████████████████████████████████████████████████████Training:  96%|███████████████████████████████████████████████████████████████████████████████████Training:  96%|███████████████████████████████████████████████████████████████████████████████████Training:  96%|███████████████████████████████████████████████████████████████████████████████████Training:  96%|███████████████████████████████████████████████████████████████████████████████████Training:  96%|███████████████████████████████████████████████████████████████████████████████████Training:  96%|███████████████████████████████████████████████████████████████████████████████████Training:  96%|███████████████████████████████████████████████████████████████████████████████████Training:  96%|███████████████████████████████████████████████████████████████████████████████████Training:  96%|███████████████████████████████████████████████████████████████████████████████████Training:  96%|███████████████████████████████████████████████████████████████████████████████████Training:  96%|███████████████████████████████████████████████████████████████████████████████████Training:  96%|███████████████████████████████████████████████████████████████████████████████████Training:  96%|███████████████████████████████████████████████████████████████████████████████████Training:  96%|███████████████████████████████████████████████████████████████████████████████████Training:  97%|███████████████████████████████████████████████████████████████████████████████████Training:  97%|███████████████████████████████████████████████████████████████████████████████████Training:  97%|███████████████████████████████████████████████████████████████████████████████████Training:  97%|███████████████████████████████████████████████████████████████████████████████████Training:  97%|███████████████████████████████████████████████████████████████████████████████████Training:  97%|███████████████████████████████████████████████████████████████████████████████████Training:  97%|███████████████████████████████████████████████████████████████████████████████████Training:  97%|███████████████████████████████████████████████████████████████████████████████████Training:  97%|███████████████████████████████████████████████████████████████████████████████████Training:  97%|███████████████████████████████████████████████████████████████████████████████████Training:  97%|███████████████████████████████████████████████████████████████████████████████████Training:  97%|███████████████████████████████████████████████████████████████████████████████████Training:  97%|███████████████████████████████████████████████████████████████████████████████████Training:  97%|███████████████████████████████████████████████████████████████████████████████████Training:  98%|███████████████████████████████████████████████████████████████████████████████████Training:  98%|███████████████████████████████████████████████████████████████████████████████████Training:  98%|███████████████████████████████████████████████████████████████████████████████████Training:  98%|███████████████████████████████████████████████████████████████████████████████████Training:  98%|███████████████████████████████████████████████████████████████████████████████████Training:  98%|███████████████████████████████████████████████████████████████████████████████████Training:  98%|███████████████████████████████████████████████████████████████████████████████████Training:  98%|███████████████████████████████████████████████████████████████████████████████████Training:  98%|███████████████Training:  99%|███████████████████████████████████████████████████████████████████████████████████Training:  99%|███████████████████████████████████████████████████████████████████████████████████Training:  99%|███████████████████████████████████████████████████████████████████████████████████Training:  99%|███████████████████████████████████████████████████████████████████████████████████Training:  99%|███████████████████████████████████████████████████████████████████████████████████Training:  99%|███████████████████████████████████████████████████████████████████████████████████Training:  99%|███████████████████████████████████████████████████████████████████████████████████Training:  99%|███████████████████████████████████████████████████████████████████████████████████Training: 100%|███████████████████████████████████████████████████████████████████████████████████Training: 100%|███████████████████████████████████████████████████████████████████████████████████Training: 100%|███████████████████████████████████████████████████████████████████████████████████Training: 100%|███████████████████████████████████████████████████████████████████████████████████Training: 100%|███████████████████████████████████████████████████████████████████████████████████Training: 100%|███████████████████████████████████████████████████████████████████████████████████Training: 100%|███████████████████████████████████████████████████████████████████████████████████                                                                                                  Validazione:   8%|███▌            Risultati Epoch 5:
+  - Train Loss: 0.5063 | Val Loss: 0.4624 | Val mIoU: 0.3765
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.4587
+    - Classe 2 (Rough): 0.3996
+    - Classe 3 (Smooth): 0.0180
+    - Classe 4 (Grass): 0.0070
+    - Classe 5 (HighVeg): 0.6048
+    - Classe 6 (LowVeg): 0.2803
+    - Classe 7 (Puddle): 0.7580
+    - Classe 8 (Obstacle): 0.8624
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.3765 <<<
+
+--- Epoch 6/30 ---
+Risultati Epoch 6:                                                                                                                                                                
+  - Train Loss: 0.4840 | Val Loss: 0.4442 | Val mIoU: 0.4477
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.4602
+    - Classe 2 (Rough): 0.4828
+    - Classe 3 (Smooth): 0.1219
+    - Classe 4 (Grass): 0.4078
+    - Classe 5 (HighVeg): 0.5897
+    - Classe 6 (LowVeg): 0.3343
+    - Classe 7 (Puddle): 0.7667
+    - Classe 8 (Obstacle): 0.8664
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.4477 <<<
+
+--- Epoch 7/30 ---
+Risultati Epoch 7:                                                                                                                                                                
+  - Train Loss: 0.4633 | Val Loss: 0.4402 | Val mIoU: 0.4716
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.4449
+    - Classe 2 (Rough): 0.5370
+    - Classe 3 (Smooth): 0.3275
+    - Classe 4 (Grass): 0.4317
+    - Classe 5 (HighVeg): 0.5632
+    - Classe 6 (LowVeg): 0.3132
+    - Classe 7 (Puddle): 0.7515
+    - Classe 8 (Obstacle): 0.8758
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.4716 <<<
+
+--- Epoch 8/30 ---
+Risultati Epoch 8:                                                                                                                                                                
+  - Train Loss: 0.4357 | Val Loss: 0.4437 | Val mIoU: 0.5037
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.3866
+    - Classe 2 (Rough): 0.5410
+    - Classe 3 (Smooth): 0.3888
+    - Classe 4 (Grass): 0.5666
+    - Classe 5 (HighVeg): 0.6378
+    - Classe 6 (LowVeg): 0.3449
+    - Classe 7 (Puddle): 0.7902
+    - Classe 8 (Obstacle): 0.8773
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.5037 <<<
+
+--- Epoch 9/30 ---
+Risultati Epoch 9:                                                                                                                                                                
+  - Train Loss: 0.4285 | Val Loss: 0.4227 | Val mIoU: 0.5110
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.4406
+    - Classe 2 (Rough): 0.5207
+    - Classe 3 (Smooth): 0.3751
+    - Classe 4 (Grass): 0.6408
+    - Classe 5 (HighVeg): 0.6136
+    - Classe 6 (LowVeg): 0.3394
+    - Classe 7 (Puddle): 0.7931
+    - Classe 8 (Obstacle): 0.8755
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.5110 <<<
+
+--- Epoch 10/30 ---
+Risultati Epoch 10:                                                                                                                                                               
+  - Train Loss: 0.4083 | Val Loss: 0.4159 | Val mIoU: 0.5247
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.4261
+    - Classe 2 (Rough): 0.5410
+    - Classe 3 (Smooth): 0.4593
+    - Classe 4 (Grass): 0.5908
+    - Classe 5 (HighVeg): 0.6825
+    - Classe 6 (LowVeg): 0.3488
+    - Classe 7 (Puddle): 0.7953
+    - Classe 8 (Obstacle): 0.8782
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.5247 <<<
+
+--- Epoch 11/30 ---
+Risultati Epoch 11:                                                                                                                                                               
+  - Train Loss: 0.4000 | Val Loss: 0.4128 | Val mIoU: 0.5125
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.3954
+    - Classe 2 (Rough): 0.5508
+    - Classe 3 (Smooth): 0.4795
+    - Classe 4 (Grass): 0.5730
+    - Classe 5 (HighVeg): 0.6227
+    - Classe 6 (LowVeg): 0.3152
+    - Classe 7 (Puddle): 0.7915
+    - Classe 8 (Obstacle): 0.8846
+
+--- Epoch 12/30 ---
+Risultati Epoch 12:                                                                                                                                                               
+  - Train Loss: 0.3856 | Val Loss: 0.4127 | Val mIoU: 0.5141
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.2144
+    - Classe 2 (Rough): 0.5791
+    - Classe 3 (Smooth): 0.4801
+    - Classe 4 (Grass): 0.6917
+    - Classe 5 (HighVeg): 0.6925
+    - Classe 6 (LowVeg): 0.3045
+    - Classe 7 (Puddle): 0.7851
+    - Classe 8 (Obstacle): 0.8794
+
+--- Epoch 13/30 ---
+Risultati Epoch 13:                                                                                                                                                               
+  - Train Loss: 0.3774 | Val Loss: 0.4185 | Val mIoU: 0.5200
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.4911
+    - Classe 2 (Rough): 0.5325
+    - Classe 3 (Smooth): 0.4874
+    - Classe 4 (Grass): 0.5700
+    - Classe 5 (HighVeg): 0.6143
+    - Classe 6 (LowVeg): 0.3201
+    - Classe 7 (Puddle): 0.7876
+    - Classe 8 (Obstacle): 0.8769
+
+--- Epoch 14/30 ---
+Risultati Epoch 14:                                                                                                                                                               
+  - Train Loss: 0.3711 | Val Loss: 0.4061 | Val mIoU: 0.5448
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.4841
+    - Classe 2 (Rough): 0.5870
+    - Classe 3 (Smooth): 0.5009
+    - Classe 4 (Grass): 0.6941
+    - Classe 5 (HighVeg): 0.6344
+    - Classe 6 (LowVeg): 0.3187
+    - Classe 7 (Puddle): 0.7980
+    - Classe 8 (Obstacle): 0.8857
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.5448 <<<
+
+--- Epoch 15/30 ---
+Risultati Epoch 15:                                                                                                                                                               
+  - Train Loss: 0.3654 | Val Loss: 0.4168 | Val mIoU: 0.5438
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.5103
+    - Classe 2 (Rough): 0.5560
+    - Classe 3 (Smooth): 0.4335
+    - Classe 4 (Grass): 0.7078
+    - Classe 5 (HighVeg): 0.6973
+    - Classe 6 (LowVeg): 0.3186
+    - Classe 7 (Puddle): 0.7870
+    - Classe 8 (Obstacle): 0.8834
+
+--- Epoch 16/30 ---
+Risultati Epoch 16:                                                                                                                                                               
+  - Train Loss: 0.3505 | Val Loss: 0.4275 | Val mIoU: 0.5619
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.5605
+    - Classe 2 (Rough): 0.6100
+    - Classe 3 (Smooth): 0.4961
+    - Classe 4 (Grass): 0.7336
+    - Classe 5 (HighVeg): 0.6851
+    - Classe 6 (LowVeg): 0.2860
+    - Classe 7 (Puddle): 0.8036
+    - Classe 8 (Obstacle): 0.8826
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.5619 <<<
+
+--- Epoch 17/30 ---
+Risultati Epoch 17:                                                                                                                                                               
+  - Train Loss: 0.3519 | Val Loss: 0.3963 | Val mIoU: 0.5311
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.2590
+    - Classe 2 (Rough): 0.5576
+    - Classe 3 (Smooth): 0.5505
+    - Classe 4 (Grass): 0.7550
+    - Classe 5 (HighVeg): 0.6852
+    - Classe 6 (LowVeg): 0.3062
+    - Classe 7 (Puddle): 0.7799
+    - Classe 8 (Obstacle): 0.8860
+
+--- Epoch 18/30 ---
+Risultati Epoch 18:                                                                                                                                                               
+  - Train Loss: 0.3396 | Val Loss: 0.4247 | Val mIoU: 0.5155
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.3018
+    - Classe 2 (Rough): 0.5732
+    - Classe 3 (Smooth): 0.4949
+    - Classe 4 (Grass): 0.7290
+    - Classe 5 (HighVeg): 0.5628
+    - Classe 6 (LowVeg): 0.3025
+    - Classe 7 (Puddle): 0.7888
+    - Classe 8 (Obstacle): 0.8867
+
+--- Epoch 19/30 ---
+Risultati Epoch 19:                                                                                                                                                               
+  - Train Loss: 0.3467 | Val Loss: 0.4024 | Val mIoU: 0.5522
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.4194
+    - Classe 2 (Rough): 0.5939
+    - Classe 3 (Smooth): 0.5640
+    - Classe 4 (Grass): 0.7667
+    - Classe 5 (HighVeg): 0.6877
+    - Classe 6 (LowVeg): 0.2723
+    - Classe 7 (Puddle): 0.7777
+    - Classe 8 (Obstacle): 0.8881
+
+--- Epoch 20/30 ---
+Risultati Epoch 20:                                                                                                                                                               
+  - Train Loss: 0.3314 | Val Loss: 0.4129 | Val mIoU: 0.5467
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.5530
+    - Classe 2 (Rough): 0.5818
+    - Classe 3 (Smooth): 0.5551
+    - Classe 4 (Grass): 0.7332
+    - Classe 5 (HighVeg): 0.6288
+    - Classe 6 (LowVeg): 0.1942
+    - Classe 7 (Puddle): 0.7893
+    - Classe 8 (Obstacle): 0.8847
+
+--- Epoch 21/30 ---
+Risultati Epoch 21:                                                                                                                                                               
+  - Train Loss: 0.3114 | Val Loss: 0.3845 | Val mIoU: 0.5781
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.5505
+    - Classe 2 (Rough): 0.6019
+    - Classe 3 (Smooth): 0.5908
+    - Classe 4 (Grass): 0.7812
+    - Classe 5 (HighVeg): 0.7256
+    - Classe 6 (LowVeg): 0.2817
+    - Classe 7 (Puddle): 0.7873
+    - Classe 8 (Obstacle): 0.8839
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.5781 <<<
+
+--- Epoch 22/30 ---
+Risultati Epoch 22:                                                                                                                                                               
+  - Train Loss: 0.3003 | Val Loss: 0.3792 | Val mIoU: 0.5838
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.5946
+    - Classe 2 (Rough): 0.6090
+    - Classe 3 (Smooth): 0.5923
+    - Classe 4 (Grass): 0.7815
+    - Classe 5 (HighVeg): 0.7058
+    - Classe 6 (LowVeg): 0.2851
+    - Classe 7 (Puddle): 0.7942
+    - Classe 8 (Obstacle): 0.8915
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.5838 <<<
+
+--- Epoch 23/30 ---
+Validazione:   0%|                                                                                                                                       | 0/169 [00:00<?, ?it/s]C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\albumentations\check_version.py:147: UserWarning: Error fetching version info <urlopen error _ssl.c:983: The handshake operation timed out>
+  data = fetch_version_info()
+Risultati Epoch 23:
+  - Train Loss: 0.2959 | Val Loss: 0.3770 | Val mIoU: 0.5828
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.5616
+    - Classe 2 (Rough): 0.6132
+    - Classe 3 (Smooth): 0.5985
+    - Classe 4 (Grass): 0.7890
+    - Classe 5 (HighVeg): 0.6970
+    - Classe 6 (LowVeg): 0.2986
+    - Classe 7 (Puddle): 0.7952
+    - Classe 8 (Obstacle): 0.8923
+
+--- Epoch 24/30 ---
+Risultati Epoch 24:                                                                                                                                                               
+  - Train Loss: 0.2949 | Val Loss: 0.3796 | Val mIoU: 0.5877
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.5612
+    - Classe 2 (Rough): 0.6114
+    - Classe 3 (Smooth): 0.6026
+    - Classe 4 (Grass): 0.7823
+    - Classe 5 (HighVeg): 0.7475
+    - Classe 6 (LowVeg): 0.3044
+    - Classe 7 (Puddle): 0.7906
+    - Classe 8 (Obstacle): 0.8893
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.5877 <<<
+
+--- Epoch 25/30 ---
+Risultati Epoch 25:                                                                                                                                                               
+  - Train Loss: 0.2885 | Val Loss: 0.3887 | Val mIoU: 0.5846
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.5626
+    - Classe 2 (Rough): 0.6161
+    - Classe 3 (Smooth): 0.5997
+    - Classe 4 (Grass): 0.7895
+    - Classe 5 (HighVeg): 0.7155
+    - Classe 6 (LowVeg): 0.2970
+    - Classe 7 (Puddle): 0.7913
+    - Classe 8 (Obstacle): 0.8894
+
+--- Epoch 26/30 ---
+Risultati Epoch 26:                                                                                                                                                               
+  - Train Loss: 0.2888 | Val Loss: 0.3778 | Val mIoU: 0.5862
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.5814
+    - Classe 2 (Rough): 0.6128
+    - Classe 3 (Smooth): 0.6047
+    - Classe 4 (Grass): 0.7839
+    - Classe 5 (HighVeg): 0.7030
+    - Classe 6 (LowVeg): 0.3147
+    - Classe 7 (Puddle): 0.7879
+    - Classe 8 (Obstacle): 0.8876
+
+--- Epoch 27/30 ---
+Risultati Epoch 27:                                                                                                                                                               
+  - Train Loss: 0.2855 | Val Loss: 0.3712 | Val mIoU: 0.5923
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.6254
+    - Classe 2 (Rough): 0.6008
+    - Classe 3 (Smooth): 0.5943
+    - Classe 4 (Grass): 0.7853
+    - Classe 5 (HighVeg): 0.7303
+    - Classe 6 (LowVeg): 0.3106
+    - Classe 7 (Puddle): 0.7944
+    - Classe 8 (Obstacle): 0.8897
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.5923 <<<
+
+--- Epoch 28/30 ---
+Risultati Epoch 28:                                                                                                                                                               
+  - Train Loss: 0.2819 | Val Loss: 0.3794 | Val mIoU: 0.5858
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.6083
+    - Classe 2 (Rough): 0.5849
+    - Classe 3 (Smooth): 0.6062
+    - Classe 4 (Grass): 0.7958
+    - Classe 5 (HighVeg): 0.7099
+    - Classe 6 (LowVeg): 0.2939
+    - Classe 7 (Puddle): 0.7849
+    - Classe 8 (Obstacle): 0.8884
+
+--- Epoch 29/30 ---
+Risultati Epoch 29:                                                                                                                                                               
+  - Train Loss: 0.2820 | Val Loss: 0.3823 | Val mIoU: 0.5850
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.5706
+    - Classe 2 (Rough): 0.5976
+    - Classe 3 (Smooth): 0.6074
+    - Classe 4 (Grass): 0.7899
+    - Classe 5 (HighVeg): 0.7104
+    - Classe 6 (LowVeg): 0.3142
+    - Classe 7 (Puddle): 0.7862
+    - Classe 8 (Obstacle): 0.8886
+
+--- Epoch 30/30 ---
+Risultati Epoch 30:                                                                                                                                                               
+  - Train Loss: 0.2812 | Val Loss: 0.3745 | Val mIoU: 0.5975
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.6305
+    - Classe 2 (Rough): 0.6128
+    - Classe 3 (Smooth): 0.6061
+    - Classe 4 (Grass): 0.8000
+    - Classe 5 (HighVeg): 0.7303
+    - Classe 6 (LowVeg): 0.3151
+    - Classe 7 (Puddle): 0.7918
+    - Classe 8 (Obstacle): 0.8912
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.5975 <<<
+
+--- Training Completato ---
+Miglior mIoU di validazione ottenuto: 0.5975
+Visualizzazione Matrice di Confusione...
+d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\3 - Loss\6 - new_baseline_2.py:229: UserWarning: FigureCanvasAgg is non-interactive, and thus cannot be shown
+  plt.title('Matrice di Confusione (Normalizzata per Riga)', fontsize=14); plt.show()
+
+Analisi finale completata. Per eseguire le predizioni su nuovi dati, usare uno script separato caricando i pesi da 'best_model.pth' e implementando la funzione predict(X). 
 
 '''
