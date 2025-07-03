@@ -212,8 +212,8 @@ def main():
     train_dirs, val_dirs = get_grouped_stratified_split(config)
     transforms = get_transforms(config["OUTPUT_SIZE"]); train_dataset = SegmentationDataset(train_dirs, transforms, config); val_dataset = SegmentationDataset(val_dirs, transforms, config)
     pin_mem = device.type == 'cuda'
-    train_loader = DataLoader(train_dataset, batch_size=config["BATCH_SIZE"], shuffle=True, num_workers=config["NUM_WORKERS"], pin_memory=pin_mem)
-    val_loader = DataLoader(val_dataset, batch_size=config["BATCH_SIZE"], shuffle=False, num_workers=config["NUM_WORKERS"], pin_memory=pin_mem)
+    train_loader = DataLoader(train_dataset, batch_size=config["BATCH_SIZE"], shuffle=True, num_workers=config["NUM_WORKERS_TRAIN"], pin_memory=pin_mem)
+    val_loader = DataLoader(val_dataset, batch_size=config["BATCH_SIZE"], shuffle=False, num_workers=config["NUM_WORKERS_VAL"], pin_memory=pin_mem)
 
     model = get_model(config).to(device)
     scaler = GradScaler(enabled=use_amp)
