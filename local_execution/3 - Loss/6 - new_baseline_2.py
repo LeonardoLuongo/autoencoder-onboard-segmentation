@@ -119,10 +119,23 @@ def get_grouped_stratified_split(config: Dict[str, Any]) -> Tuple[List[str], Lis
     if not all_dirs: raise FileNotFoundError("Nessuna directory di dati trovata.")
     all_dirs = sorted(list(set(all_dirs)))
 
-    hashes = {path: imagehash.phash(Image.open(os.path.join(path, 'rgb.jpg'))) for path in tqdm(all_dirs, desc="Calcolo Hash")}
-    G = nx.Graph(list(nx.connected_components(nx.from_edgelist(
-        (u, v) for i, u in enumerate(list(hashes.keys())) for j, v in enumerate(list(hashes.keys())) if i < j and hashes[u] - hashes[v] < 5
-    ))))
+    # 1. Calcola gli hash per ogni immagine
+    hashes = {path: imagehash.phash(Image.open(os.path.join(path, 'rgb.jpg'))) 
+              for path in tqdm(all_dirs, desc="Calcolo Hash")}
+    
+    # 2. Crea un grafo vuoto e aggiungi tutti i percorsi come nodi
+    G = nx.Graph()
+    G.add_nodes_from(hashes.keys())
+    
+    # 3. Aggiungi gli archi (collegamenti) tra le immagini simili
+    #    Questo è il modo corretto e leggibile per farlo.
+    path_list = list(hashes.keys())
+    for i in range(len(path_list)):
+        for j in range(i + 1, len(path_list)):
+            if hashes[path_list[i]] - hashes[path_list[j]] < 5:
+                G.add_edge(path_list[i], path_list[j])
+                
+    # 4. Ora, su questo grafo corretto, trova i gruppi di immagini connesse
     image_groups = list(nx.connected_components(G))
     tqdm.write(f"Trovati {len(image_groups)} gruppi di immagini uniche.")
     
