@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 
 import numpy as np
 from PIL import Image
@@ -304,3 +304,168 @@ def main():
 # =============================================================================
 if __name__ == "__main__":
     main()
+
+
+
+'''
+
+Risultati Epoch 1:                                                                                                                                                                
+  - Training Loss: 1.3730 | Validation Loss: 0.8997 | Validation mIoU: 0.3493
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.8437
+    - Classe 2 (Rough): 0.0007
+    - Classe 3 (Smooth): 0.4773
+    - Classe 4 (Grass): 0.5256
+    - Classe 5 (HighVeg): 0.8006
+    - Classe 6 (LowVeg): 0.0098
+    - Classe 7 (Debris): 0.4855
+    - Classe 8 (Obstacle): 0.0000
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.3493 <<<
+
+
+--- Epoch 2/20 ---
+Risultati Epoch 2:                                                                                                                                                                
+  - Training Loss: 0.8599 | Validation Loss: 0.7092 | Validation mIoU: 0.3667
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.8822
+    - Classe 2 (Rough): 0.0001
+    - Classe 3 (Smooth): 0.5370
+    - Classe 4 (Grass): 0.5570
+    - Classe 5 (HighVeg): 0.8155
+    - Classe 6 (LowVeg): 0.0038
+    - Classe 7 (Debris): 0.5047
+    - Classe 8 (Obstacle): 0.0000
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.3667 <<<
+
+
+--- Epoch 3/20 ---
+Risultati Epoch 3:                                                                                                                                                                
+  - Training Loss: 0.7104 | Validation Loss: 0.6171 | Validation mIoU: 0.3844
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.8789
+    - Classe 2 (Rough): 0.0001
+    - Classe 3 (Smooth): 0.5985
+    - Classe 4 (Grass): 0.5738
+    - Classe 5 (HighVeg): 0.8309
+    - Classe 6 (LowVeg): 0.0120
+    - Classe 7 (Debris): 0.5655
+    - Classe 8 (Obstacle): 0.0000
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.3844 <<<
+
+
+--- Epoch 4/20 ---
+Risultati Epoch 4:                                                                                                                                                                
+  - Training Loss: 0.6543 | Validation Loss: 0.5913 | Validation mIoU: 0.3874
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.8927
+    - Classe 2 (Rough): 0.0000
+    - Classe 3 (Smooth): 0.6215
+    - Classe 4 (Grass): 0.5567
+    - Classe 5 (HighVeg): 0.8289
+    - Classe 6 (LowVeg): 0.0124
+    - Classe 7 (Debris): 0.5749
+    - Classe 8 (Obstacle): 0.0000
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.3874 <<<
+
+
+--- Epoch 5/20 ---
+Risultati Epoch 5:                                                                                                                                                                
+  - Training Loss: 0.5904 | Validation Loss: 0.6088 | Validation mIoU: 0.3876
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.8828
+    - Classe 2 (Rough): 0.0000
+    - Classe 3 (Smooth): 0.5984
+    - Classe 4 (Grass): 0.5221
+    - Classe 5 (HighVeg): 0.8336
+    - Classe 6 (LowVeg): 0.1169
+    - Classe 7 (Debris): 0.5351
+    - Classe 8 (Obstacle): 0.0000
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.3876 <<<
+
+
+--- Epoch 6/20 ---
+Risultati Epoch 6:                                                                                                                                                                
+  - Training Loss: 0.5641 | Validation Loss: 0.5396 | Validation mIoU: 0.4023
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.8910
+    - Classe 2 (Rough): 0.0000
+    - Classe 3 (Smooth): 0.5797
+    - Classe 4 (Grass): 0.5868
+    - Classe 5 (HighVeg): 0.8391
+    - Classe 6 (LowVeg): 0.1755
+    - Classe 7 (Debris): 0.5481
+    - Classe 8 (Obstacle): 0.0000
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.4023 <<<
+
+
+--- Epoch 7/20 ---
+Risultati Epoch 7:                                                                                                                                                                
+  - Training Loss: 0.5231 | Validation Loss: 0.5574 | Validation mIoU: 0.4111
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.8902
+    - Classe 2 (Rough): 0.0000
+    - Classe 3 (Smooth): 0.6123
+    - Classe 4 (Grass): 0.5845
+    - Classe 5 (HighVeg): 0.8325
+    - Classe 6 (LowVeg): 0.2250
+    - Classe 7 (Debris): 0.5553
+    - Classe 8 (Obstacle): 0.0000
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.4111 <<<
+
+
+--- Epoch 8/20 ---
+Risultati Epoch 8:                                                                                                                                                                
+  - Training Loss: 0.4934 | Validation Loss: 0.5288 | Validation mIoU: 0.4161
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.8850
+    - Classe 2 (Rough): 0.0000
+    - Classe 3 (Smooth): 0.6269
+    - Classe 4 (Grass): 0.5819
+    - Classe 5 (HighVeg): 0.8377
+    - Classe 6 (LowVeg): 0.2171
+    - Classe 7 (Debris): 0.5963
+    - Classe 8 (Obstacle): 0.0000
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.4161 <<<
+
+
+--- Epoch 9/20 ---
+Risultati Epoch 9:                                                                                                                                                                
+  - Training Loss: 0.4574 | Validation Loss: 0.5425 | Validation mIoU: 0.4064
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.8924
+    - Classe 2 (Rough): 0.0000
+    - Classe 3 (Smooth): 0.6052
+    - Classe 4 (Grass): 0.5707
+    - Classe 5 (HighVeg): 0.8355
+    - Classe 6 (LowVeg): 0.2097
+    - Classe 7 (Debris): 0.5445
+    - Classe 8 (Obstacle): 0.0000
+
+--- Epoch 10/20 ---
+Risultati Epoch 10:                                                                                                                                                               
+  - Training Loss: 0.4297 | Validation Loss: 0.5040 | Validation mIoU: 0.4197
+  - IoU per Classe (Validation):
+    - Classe 1 (Sky): 0.9025
+    - Classe 2 (Rough): 0.0000
+    - Classe 3 (Smooth): 0.6425
+    - Classe 4 (Grass): 0.5988
+    - Classe 5 (HighVeg): 0.8410
+    - Classe 6 (LowVeg): 0.1996
+    - Classe 7 (Debris): 0.5929
+    - Classe 8 (Obstacle): 0.0000
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.4197 <<<
+
+
+--- Epoch 11/20 ---
+Training:   4%|████▍                                                                                                                | 7/186 [00:03<01:32,  1.93it/s, loss=0.6032] 
+
+'''
