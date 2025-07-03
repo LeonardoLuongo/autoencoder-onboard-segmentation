@@ -361,11 +361,15 @@ def main():
     # Modello
     model = get_model(config).to(device)
     
-    # Calcola i pesi per la loss sul training set (la funzione va definita sopra)
-    class_weights = calculate_class_weights(train_dataset, config)
+    # DiceLoss è la nostra arma principale contro lo sbilanciamento
+    criterion_dice = DiceLoss(mode='multiclass', from_logits=True) 
     
-    # Alpha è il peso per le classi (simile a prima), gamma è il fattore di focusing
-    criterion = FocalLoss(mode='multiclass', alpha=class_weights, gamma=2.0).to(device)
+    # FocalLoss si concentra sui pixel difficili. Gamma=2 è un buon default.
+    criterion_focal = FocalLoss(mode='multiclass', gamma=2)
+    
+    # Li combiniamo
+    def combined_loss(pred, target):
+        return 0.5 * criterion_dice(pred, target) + 0.5 * criterion_focal(pred, target)
     
     # Ottimizzatore
     optimizer = optim.Adam(model.parameters(), lr=config["LEARNING_RATE"], weight_decay=config["WEIGHT_DECAY"])
@@ -391,8 +395,8 @@ def main():
         print(f"\n--- Epoch {epoch+1}/{config['NUM_EPOCHS']} ---")
         
         # Le funzioni train_one_epoch e evaluate vanno definite sopra
-        train_loss = train_one_epoch(model, train_loader, optimizer, criterion, scaler, device, use_amp)
-        val_loss, val_miou, val_iou_per_class = evaluate(model, val_loader, criterion, device, config["NUM_CLASSES"], config["IGNORE_INDEX"])
+        train_loss = train_one_epoch(model, train_loader, optimizer, combined_loss, scaler, device, use_amp)
+        val_loss, val_miou, val_iou_per_class = evaluate(model, val_loader, combined_loss, device, config["NUM_CLASSES"], config["IGNORE_INDEX"])
         
         # Aggiorna lo scheduler con il mIoU di validazione
         scheduler.step(val_miou)
