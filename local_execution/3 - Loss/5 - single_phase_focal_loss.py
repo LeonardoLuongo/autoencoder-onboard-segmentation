@@ -34,7 +34,8 @@ def get_config() -> Dict[str, Any]:
 
     config = {
         "DEVICE": torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
-        "DATASET_PATH": os.path.join(base_path, "dataset/training/train"),
+        "DATASET_PATH_TRAIN": os.path.join(base_path, "dataset/training/train"),
+        "DATASET_PATH_AUG": os.path.join(base_path, "dataset/training/augmented"),
         "MODEL_SAVE_PATH": os.path.join(base_path, "best_finetuned_model.pth"),
 
         # Parametri del dataset e split (stabili, hanno funzionato bene)
@@ -110,9 +111,13 @@ def get_transforms(is_train: bool, output_size: Tuple[int, int]) -> A.Compose:
 # 4. FUNZIONI HELPER (SPLIT E METRICHE)
 # =============================================================================
 def get_grouped_stratified_split(config: Dict[str, Any]) -> Tuple[List[str], List[str]]:
-    dataset_path = config["DATASET_PATH"]
+    dataset_path_train = config["DATASET_PATH_TRAIN"]
+    dataset_path_aug = config["DATASET_PATH_AUG"]
     print("Avvio analisi di similarità e split stratificato...")
-    all_dirs = sorted([d for d in glob.glob(os.path.join(dataset_path, "*")) if os.path.isdir(d) and not os.path.basename(d).startswith('__')])
+    all_dirs = sorted(
+        [d for d in glob.glob(os.path.join(dataset_path_train, "*")) if os.path.isdir(d) and not os.path.basename(d).startswith('__')],
+        [d for d in glob.glob(os.path.join(dataset_path_aug, "*")) if os.path.isdir(d) and not os.path.basename(d).startswith('__')]
+        )
     
     hashes = {path: imagehash.phash(Image.open(os.path.join(path, 'rgb.jpg'))) for path in tqdm(all_dirs, desc="Calcolo Hash", leave=False)}
     
