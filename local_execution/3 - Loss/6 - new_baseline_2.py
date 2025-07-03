@@ -1,9 +1,10 @@
-# SCRIPT DI TRAINING PER L'ESPERIMENTO "ATTACCO FINALE"
+# SCRIPT DI TRAINING FINALE CON AUGMENTATION OFFLINE E ANALISI AVANZATA
 
 # =============================================================================
 # 1. IMPORTS
 # =============================================================================
 import os
+import sys
 import glob
 from typing import Tuple, List, Dict, Any
 
@@ -11,93 +12,125 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 
 import numpy as np
 from PIL import Image
 from tqdm import tqdm
+import imagehash
+import networkx as nx
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import confusion_matrix
 import segmentation_models_pytorch as smp
-from segmentation_models_pytorch.losses import TverskyLoss
+from segmentation_models_pytorch.losses import DiceLoss, FocalLoss
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 # =============================================================================
 # 2. CONFIGURAZIONE
 # =============================================================================
 def get_config() -> Dict[str, Any]:
-    """
-    Restituisce un dizionario con la configurazione per l'esperimento "Attacco Finale".
-    """
+    """Configurazione per l'esperimento finale."""
+    base_path = "./"
     config = {
-        # --- Parametri di base ---
         "DEVICE": torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
-        "DATASET_PATH": "./dataset/training/train",
-        "MODEL_SAVE_PATH": "./efficientnet-b4_tversky_model.pth", # Nuovo nome per il modello
-        "RANDOM_SEED": 42,
-        "NUM_WORKERS": 0,
-        "USE_AMP": True,
-
-        # --- Pilastro 1: Aumentare la Capacità del Modello ---
+        "DATASET_PATH_TRAIN": os.path.join(base_path, "dataset/training/train"),
+        "DATASET_PATH_AUG": os.path.join(base_path, "dataset/training/augmented"),
+        "DATASET_PATH_AUG_AGGR": os.path.join(base_path, "dataset/training/augmented_aggressive"),
+        "MODEL_SAVE_PATH": os.path.join(base_path, "final_model_efficientnet-b4_dice_focal.pth"),
+        
         "ENCODER": "efficientnet-b4",
         "ENCODER_WEIGHTS": "imagenet",
-
-        # --- Pilastro 2: Sfruttare la Memoria (Risoluzione e Batch Size) ---
         "OUTPUT_SIZE": (384, 768),
-        "BATCH_SIZE": 4, # Iniziamo con 4, come suggerito
+        "BATCH_SIZE": 4,
 
-        # --- Parametri di Training ---
-        "NUM_EPOCHS": 25, # Aumentato a 25 per dare tempo al modello più grande di convergere
+        "NUM_EPOCHS": 30,
         "LEARNING_RATE": 1e-4,
-        "WEIGHT_DECAY": 1e-4, # Aumentato per regolarizzare il modello più grande
+        "WEIGHT_DECAY": 1e-5,
 
-        # --- Parametri del Dataset ---
         "NUM_CLASSES": 9,
         "IGNORE_INDEX": 0,
         "VALIDATION_SPLIT": 0.2,
+        "RANDOM_SEED": 42,
+        "NUM_WORKERS_TRAIN": 2,
+        "NUM_WORKERS_VAL": 1,
+        "USE_AMP": True,
+        
+        "RARE_CLASS_INDICES": [2, 6, 8], # Rough Trail, LowVeg, Obstacle
     }
+    
+    config["CLASS_NAMES"] = [
+        "Ignored", "Sky", "Rough", "Smooth", "Grass", 
+        "HighVeg", "LowVeg", "Debris", "Obstacle"
+    ]
     return config
 
 # =============================================================================
-# 3. MAPPA COLORI E FUNZIONE DI CONVERSIONE (INVARIATA)
+# 3. GESTIONE DATI (DA SCRIPT ORIGINALE)
 # =============================================================================
-COLOR_TO_CLASS_ID = {
-    (255, 255, 255): 0, (1, 88, 255): 1, (255, 0, 128): 2, (178, 176, 153): 3,
-    (128, 255, 0): 4, (40, 80, 0): 5, (0, 160, 0): 6, (156, 76, 30): 7, (255, 0, 0): 8
-}
+def get_grouped_stratified_split(config: Dict[str, Any]) -> Tuple[List[str], List[str]]:
+    paths = {
+        "original": config["DATASET_PATH_TRAIN"],
+        "augmented": config["DATASET_PATH_AUG"],
+        "aggressive": config["DATASET_PATH_AUG_AGGR"],
+    }
+    all_dirs = []
+    print("Caricamento percorsi dei dataset...")
+    for key, path in paths.items():
+        dirs = [d for d in glob.glob(os.path.join(path, "*")) if os.path.isdir(d)]
+        print(f"Trovati {len(dirs)} campioni in '{key}'.")
+        all_dirs.extend(dirs)
+    
+    print(f"Dimensione totale del dataset di training: {len(all_dirs)} campioni.")
+    all_dirs = sorted(list(set(all_dirs))) # Rimuovi duplicati e ordina
 
-def rgb_to_class_id_mask(mask_rgb: np.ndarray, color_map: Dict[Tuple[int, int, int], int], ignore_index: int) -> np.ndarray:
-    class_mask = np.full(mask_rgb.shape[:2], fill_value=ignore_index, dtype=np.uint8)
-    for color, class_id in color_map.items():
-        matches = np.all(mask_rgb == color, axis=-1)
-        class_mask[matches] = class_id
-    return class_mask
+    hashes = {path: imagehash.phash(Image.open(os.path.join(path, 'rgb.jpg'))) for path in tqdm(all_dirs, desc="Calcolo Hash")}
+    
+    G = nx.Graph()
+    G.add_nodes_from(hashes.keys())
+    path_list = list(hashes.keys())
+    for i in range(len(path_list)):
+        for j in range(i + 1, len(path_list)):
+            if hashes[path_list[i]] - hashes[path_list[j]] < 5:
+                G.add_edge(path_list[i], path_list[j])
+                
+    image_groups = list(nx.connected_components(G))
+    print(f"Trovati {len(image_groups)} gruppi di immagini uniche.")
+    
+    group_labels = []
+    for group in tqdm(image_groups, desc="Etichettatura gruppi per lo split"):
+        has_rare = any(
+            rare_id in np.unique(Image.open(os.path.join(p, 'labels.png')).convert("L"))
+            for p in group for rare_id in config["RARE_CLASS_INDICES"]
+        )
+        group_labels.append(1 if has_rare else 0)
+        
+    train_groups, val_groups = train_test_split(
+        image_groups, test_size=config["VALIDATION_SPLIT"],
+        random_state=config["RANDOM_SEED"], stratify=group_labels
+    )
+    
+    train_dirs = [p for group in train_groups for p in group]
+    val_dirs = [p for group in val_groups for p in group]
+    
+    print(f"Split stratificato creato: {len(train_dirs)} train, {len(val_dirs)} validation.")
+    return train_dirs, val_dirs
 
-# =============================================================================
-# 4. DATASET E AUGMENTATION (INVARIATI)
-# =============================================================================
-def get_transforms(is_train: bool, output_size: Tuple[int, int]) -> A.Compose:
-    mean, std = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
-    if is_train:
-        return A.Compose([
-            A.HorizontalFlip(p=0.5),
-            A.Resize(height=output_size[0], width=output_size[1]),
-            A.Normalize(mean=mean, std=std),
-            ToTensorV2(),
-        ])
-    else:
-        return A.Compose([
-            A.Resize(height=output_size[0], width=output_size[1]),
-            A.Normalize(mean=mean, std=std),
-            ToTensorV2(),
-        ])
+def get_transforms(output_size: Tuple[int, int]) -> A.Compose:
+    """Restituisce la pipeline di solo preprocessing (no augmentation online)."""
+    return A.Compose([
+        A.Resize(height=output_size[0], width=output_size[1]),
+        A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ToTensorV2(),
+    ])
 
 class SegmentationDataset(Dataset):
-    def __init__(self, sample_dirs: List[str], color_map: Dict, transform: A.Compose, ignore_index: int):
+    """Dataset che carica le maschere pre-etichettate (non RGB)."""
+    def __init__(self, sample_dirs: List[str], transform: A.Compose):
         self.sample_dirs = sample_dirs
-        self.color_map = color_map
         self.transform = transform
-        self.ignore_index = ignore_index
 
     def __len__(self) -> int:
         return len(self.sample_dirs)
@@ -106,14 +139,15 @@ class SegmentationDataset(Dataset):
         sample_dir = self.sample_dirs[idx]
         img_path = os.path.join(sample_dir, 'rgb.jpg')
         mask_path = os.path.join(sample_dir, 'labels.png')
-        image_rgb = np.array(Image.open(img_path).convert("RGB"))
-        mask_rgb = np.array(Image.open(mask_path).convert("RGB"))
-        mask_class_ids = rgb_to_class_id_mask(mask_rgb, self.color_map, self.ignore_index)
-        augmented = self.transform(image=image_rgb, mask=mask_class_ids)
+        
+        image = np.array(Image.open(img_path).convert("RGB"))
+        mask = np.array(Image.open(mask_path).convert("L")) # Carica come scala di grigi (indici)
+        
+        augmented = self.transform(image=image, mask=mask)
         return augmented['image'], augmented['mask']
 
 # =============================================================================
-# 5. MODELLO E FUNZIONI HELPER (INVARIATI)
+# 4. FUNZIONI HELPER E MODELLO
 # =============================================================================
 def get_model(config: Dict[str, Any]) -> nn.Module:
     print(f"Creazione del modello: U-Net con encoder '{config['ENCODER']}'")
@@ -127,20 +161,60 @@ def get_model(config: Dict[str, Any]) -> nn.Module:
     print(f"Parametri addestrabili del modello: {total_params:,}")
     return model
 
+class CombinedDiceFocalLoss(nn.Module):
+    """Combina Dice Loss e Focal Loss."""
+    def __init__(self, dice_weight=0.5, focal_weight=0.5, focal_gamma=2.0):
+        super().__init__()
+        # DiceLoss necessita dell'argomento esplicito
+        self.dice = DiceLoss(mode='multiclass', from_logits=True)
+        # FocalLoss assume già i logits, quindi l'argomento non serve e non esiste
+        self.focal = FocalLoss(mode='multiclass', gamma=focal_gamma) # <-- MODIFICA QUI
+        self.dice_weight = dice_weight
+        self.focal_weight = focal_weight
+
+    def forward(self, pred, target):
+        dice_loss_val = self.dice(pred, target)
+        focal_loss_val = self.focal(pred, target)
+        return self.dice_weight * dice_loss_val + self.focal_weight * focal_loss_val
+    
+
 def compute_iou(preds, labels, num_classes, ignore_index):
     iou_per_class = np.zeros(num_classes)
     for cls in range(num_classes):
-        if cls == ignore_index:
-            continue
-        pred_inds, target_inds = (preds == cls), (labels == cls)
+        if cls == ignore_index: continue
+        pred_inds = (preds == cls)
+        target_inds = (labels == cls)
         intersection = np.logical_and(pred_inds, target_inds).sum()
         union = np.logical_or(pred_inds, target_inds).sum()
         iou_per_class[cls] = intersection / union if union > 0 else np.nan
     mean_iou = np.nanmean(iou_per_class)
     return mean_iou, iou_per_class
 
+def plot_confusion_matrix(all_labels, all_preds, class_names, ignore_index):
+    """Calcola e visualizza la matrice di confusione normalizzata."""
+    print("Calcolo della Matrice di Confusione...")
+    labels_to_include = [i for i, name in enumerate(class_names) if i != ignore_index]
+    names_to_include = [name for i, name in enumerate(class_names) if i != ignore_index]
+
+    cm = confusion_matrix(
+        all_labels.flatten(), 
+        all_preds.flatten(), 
+        labels=labels_to_include,
+        normalize='true'
+    )
+    
+    plt.figure(figsize=(12, 10))
+    sns.heatmap(
+        cm, annot=True, fmt='.2%', cmap='Blues',
+        xticklabels=names_to_include, yticklabels=names_to_include
+    )
+    plt.xlabel('Predicted Label', fontsize=12)
+    plt.ylabel('True Label', fontsize=12)
+    plt.title('Matrice di Confusione (Normalizzata per Riga)', fontsize=14)
+    plt.show()
+
 # =============================================================================
-# 6. FUNZIONI DI TRAINING E VALIDAZIONE (INVARIATE)
+# 5. CICLI DI TRAINING E VALIDAZIONE
 # =============================================================================
 def train_one_epoch(model, loader, optimizer, criterion, scaler, device, use_amp):
     model.train()
@@ -159,7 +233,7 @@ def train_one_epoch(model, loader, optimizer, criterion, scaler, device, use_amp
         progress_bar.set_postfix(loss=f"{loss.item():.4f}")
     return running_loss / len(loader)
 
-def evaluate(model, loader, criterion, device, num_classes, ignore_index):
+def evaluate(model, loader, criterion, device, config) -> Tuple[float, float, np.ndarray, np.ndarray, np.ndarray]:
     model.eval()
     total_loss = 0.0
     all_preds, all_labels = [], []
@@ -173,82 +247,152 @@ def evaluate(model, loader, criterion, device, num_classes, ignore_index):
             preds = torch.argmax(outputs, dim=1)
             all_preds.append(preds.cpu().numpy())
             all_labels.append(masks.cpu().numpy())
+            
     all_preds = np.concatenate(all_preds)
     all_labels = np.concatenate(all_labels)
     avg_loss = total_loss / len(loader)
-    mean_iou, iou_per_class = compute_iou(all_preds, all_labels, num_classes, ignore_index)
-    return avg_loss, mean_iou, iou_per_class
+    mean_iou, iou_per_class = compute_iou(all_preds, all_labels, config["NUM_CLASSES"], config["IGNORE_INDEX"])
+    return avg_loss, mean_iou, iou_per_class, all_labels, all_preds
 
 # =============================================================================
-# 7. FUNZIONE PRINCIPALE (AGGIORNATA)
+# 6. FUNZIONE PRINCIPALE
 # =============================================================================
 def main():
     config = get_config()
     device = config["DEVICE"]
     use_amp = config["USE_AMP"] and device.type == 'cuda'
     print(f"Device: {device} | Mixed Precision: {use_amp}")
-    print(f"Esperimento: Attacco Finale con {config['ENCODER']} e TverskyLoss")
+    print(f"Esperimento Finale: {config['ENCODER']}, dati offline, Dice+Focal Loss")
 
-    all_sample_dirs = glob.glob(os.path.join(config["DATASET_PATH"], "*"))
-    all_sample_dirs = sorted([d for d in all_sample_dirs if os.path.isdir(d)])
+    train_dirs, val_dirs = get_grouped_stratified_split(config)
     
-    train_dirs, val_dirs = train_test_split(
-        all_sample_dirs, test_size=config["VALIDATION_SPLIT"], random_state=config["RANDOM_SEED"]
-    )
-    print(f"Dataset: {len(train_dirs)} train, {len(val_dirs)} val | Risoluzione: {config['OUTPUT_SIZE']}")
-
-    train_transforms = get_transforms(is_train=True, output_size=config["OUTPUT_SIZE"])
-    val_transforms = get_transforms(is_train=False, output_size=config["OUTPUT_SIZE"])
-
-    train_dataset = SegmentationDataset(train_dirs, COLOR_TO_CLASS_ID, train_transforms, config["IGNORE_INDEX"])
-    val_dataset = SegmentationDataset(val_dirs, COLOR_TO_CLASS_ID, val_transforms, config["IGNORE_INDEX"])
+    transforms = get_transforms(config["OUTPUT_SIZE"])
+    train_dataset = SegmentationDataset(train_dirs, transforms)
+    val_dataset = SegmentationDataset(val_dirs, transforms)
 
     train_loader = DataLoader(
         train_dataset, batch_size=config["BATCH_SIZE"], shuffle=True,
-        num_workers=config["NUM_WORKERS"], pin_memory=True
+        num_workers=config["NUM_WORKERS_TRAIN"], pin_memory=True
     )
     val_loader = DataLoader(
         val_dataset, batch_size=config["BATCH_SIZE"], shuffle=False,
-        num_workers=config["NUM_WORKERS"], pin_memory=True
+        num_workers=config["NUM_WORKERS_VAL"], pin_memory=True
     )
 
     model = get_model(config).to(device)
-
-    # --- Pilastro 3: Attaccare lo sbilanciamento con una Loss Ibrida/Avanzata ---
-    print("Loss function: TverskyLoss (generalizzazione di Dice Loss)")
-    criterion = TverskyLoss(mode='multiclass', from_logits=True, alpha=0.5, beta=0.5, gamma=1.0)
-    
+    criterion = CombinedDiceFocalLoss()
     optimizer = optim.Adam(model.parameters(), lr=config["LEARNING_RATE"], weight_decay=config["WEIGHT_DECAY"])
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.2)
     scaler = GradScaler(enabled=use_amp)
 
-    best_miou = -1.0
+    best_iou = -1.0
     
-    print("\n--- Inizio Training 'Attacco Finale' ---")
+    print("\n--- Inizio Training ---")
     for epoch in range(config["NUM_EPOCHS"]):
         print(f"\n--- Epoch {epoch+1}/{config['NUM_EPOCHS']} ---")
         
         train_loss = train_one_epoch(model, train_loader, optimizer, criterion, scaler, device, use_amp)
-        val_loss, val_miou, val_iou_per_class = evaluate(model, val_loader, criterion, device, config["NUM_CLASSES"], config["IGNORE_INDEX"])
+        val_loss, val_miou, val_iou_per_class, val_labels, val_preds = evaluate(model, val_loader, criterion, device, config)
+        
+        scheduler.step(val_miou)
         
         print(f"Risultati Epoch {epoch+1}:")
         print(f"  - Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f}")
         print("  - IoU per Classe (Validation):")
-        class_names = ["Ignored", "Sky", "Rough", "Smooth", "Grass", "HighVeg", "LowVeg", "Debris", "Obstacle"]
         for i, iou in enumerate(val_iou_per_class):
             if i != config["IGNORE_INDEX"]:
-                print(f"    - Classe {i} ({class_names[i]}): {iou:.4f}")
+                print(f"    - Classe {i} ({config['CLASS_NAMES'][i]}): {iou:.4f}")
         
-        if val_miou > best_miou:
-            best_miou = val_miou
+        if val_miou > best_iou:
+            best_iou = val_miou
             torch.save(model.state_dict(), config["MODEL_SAVE_PATH"])
-            print(f"\n>>> 🎉 Nuovo modello migliore salvato! mIoU: {best_miou:.4f} <<<\n")
+            print(f"\n>>> 🎉 Nuovo modello migliore salvato! mIoU: {best_iou:.4f} <<<")
+            plot_confusion_matrix(val_labels, val_preds, config["CLASS_NAMES"], config["IGNORE_INDEX"])
 
     print("\n--- Training Completato ---")
-    print(f"Miglior mIoU di validazione ottenuto: {best_miou:.4f}")
-    print(f"Modello salvato in: {config['MODEL_SAVE_PATH']}")
+    print(f"Miglior mIoU di validazione ottenuto: {best_iou:.4f}")
 
 # =============================================================================
-# 8. ESECUZIONE
+# 7. ESECUZIONE
 # =============================================================================
 if __name__ == "__main__":
     main()
+
+
+'''
+:\Users\leona\AppData\Roaming\Python\Python312\site-packages\albumentations\check_version.py:147: UserWarning: Error fetching version info <urlopen error _ssl.c:983: The handshake operation timed out>
+  data = fetch_version_info()
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [64,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [65,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [66,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [67,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [68,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [69,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [70,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [71,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [72,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [73,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [74,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [75,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [76,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [77,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [78,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [79,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [80,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [81,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [82,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [83,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [84,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [85,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [86,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [87,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [88,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [89,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [90,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [91,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [92,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [93,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [94,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
+C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [38,0,0], thread: [95,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
+Traceback (most recent call last):
+  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\3 - Loss\6 - new_baseline_2.py", line 319, in <module>
+    main()
+  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\3 - Loss\6 - new_baseline_2.py", line 294, in main
+    train_loss = train_one_epoch(model, train_loader, optimizer, criterion, scaler, device, use_amp)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\3 - Loss\6 - new_baseline_2.py", line 227, in train_one_epoch
+    loss = criterion(outputs, masks)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\nn\modules\module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\nn\modules\module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\3 - Loss\6 - new_baseline_2.py", line 176, in forward
+    dice_loss_val = self.dice(pred, target)
+                    ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\nn\modules\module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\nn\modules\module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\segmentation_models_pytorch\losses\dice.py", line 109, in forward
+    scores = self.compute_score(
+             ^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\segmentation_models_pytorch\losses\dice.py", line 137, in compute_score
+    return soft_dice_score(output, target, smooth, eps, dims)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\segmentation_models_pytorch\losses\_functional.py", line 173, in soft_dice_score
+    dice_score = soft_tversky_score(output, target, 0.5, 0.5, smooth, eps, dims)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\segmentation_models_pytorch\losses\_functional.py", line 196, in soft_tversky_score
+    output_sum = torch.sum(output, dim=dims)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: CUDA error: device-side assert triggered
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+
+'''
