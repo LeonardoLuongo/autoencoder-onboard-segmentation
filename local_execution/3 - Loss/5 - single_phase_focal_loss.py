@@ -36,6 +36,7 @@ def get_config() -> Dict[str, Any]:
         "DEVICE": torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
         "DATASET_PATH_TRAIN": os.path.join(base_path, "dataset/training/train"),
         "DATASET_PATH_AUG": os.path.join(base_path, "dataset/training/augmented"),
+        "DATASET_PATH_AUG_AGGR": os.path.join(base_path, "dataset/training/augmented_aggressive"),
         "MODEL_SAVE_PATH": os.path.join(base_path, "best_finetuned_model.pth"),
 
         # Parametri del dataset e split (stabili, hanno funzionato bene)
@@ -83,29 +84,25 @@ class SegmentationDataset(Dataset):
         return augmented['image'], augmented['mask']
     
 # =============================================================================
-# 3. DATA AUGMENTATION (PIÙ AGGRESSIVA)
+# 3. DATA AUGMENTATION -> ORA SOLO PREPROCESSING
 # =============================================================================
-def get_transforms(is_train: bool, output_size: Tuple[int, int]) -> A.Compose:
-    """Restituisce la pipeline di augmentation appropriata."""
-    mean=(0.485, 0.456, 0.406)
-    std=(0.229, 0.224, 0.225)
+def get_transforms(output_size: Tuple[int, int]) -> A.Compose:
+    """
+    Restituisce la pipeline di trasformazioni base (solo preprocessing).
+    L'augmentation on-the-fly è stata rimossa, poiché i dati vengono già caricati
+    da cartelle pre-aumentate.
+    """
+    mean=(0.0017, 0.0018, 0.0017)
+    std=(0.0010, 0.0010, 0.0010)
     
-    if is_train:
-        return A.Compose([
-            A.Resize(height=output_size[0], width=output_size[1]),
-            A.HorizontalFlip(p=0.5),
-            A.ShiftScaleRotate(p=0.5), # Parametri di default, meno estremi
-            A.RandomBrightnessContrast(p=0.3),
-            # Rimuoviamo CoarseDropout per ora, è molto aggressivo
-            A.Normalize(mean=mean, std=std),
-            ToTensorV2(),
-        ])
-    else: # Validation
-        return A.Compose([
-            A.Resize(height=output_size[0], width=output_size[1]),
-            A.Normalize(mean=mean, std=std),
-            ToTensorV2(),
-        ])
+    # MODIFICA: Rimossa la logica condizionale is_train.
+    # Questa pipeline ora si applica sia al training che alla validazione.
+    # Esegue solo le operazioni necessarie: resize, normalizzazione e conversione a tensore.
+    return A.Compose([
+        A.Resize(height=output_size[0], width=output_size[1]),
+        A.Normalize(mean=mean, std=std),
+        ToTensorV2(),
+    ])
 
 # =============================================================================
 # 4. FUNZIONI HELPER (SPLIT E METRICHE)
@@ -116,6 +113,9 @@ def get_grouped_stratified_split(config: Dict[str, Any]) -> Tuple[List[str], Lis
 
     # Percorso al dataset aumentato
     dataset_path_aug = config["DATASET_PATH_AUG"]
+
+    # Percorso al dataset aumentato aggressivamente
+    dataset_path_aug_aggr = config["DATASET_PATH_AUG_AGGR"]
 
     print("Caricamento percorsi dei dataset...")
 
@@ -133,8 +133,15 @@ def get_grouped_stratified_split(config: Dict[str, Any]) -> Tuple[List[str], Lis
     ]
     print(f"Trovati {len(augmented_dirs)} campioni aumentati.")
 
+    # Ottieni la lista delle directory aumentate aggressive
+    augmented_aggr_dirs = [
+        d for d in glob.glob(os.path.join(dataset_path_aug_aggr, "*")) 
+        if os.path.isdir(d) and not os.path.basename(d).startswith('__')
+    ]
+    print(f"Trovati {len(augmented_aggr_dirs)} campioni aumentati aggressivamente.")
+
     # Unisci le due liste in un'unica lista
-    all_dirs = original_dirs + augmented_dirs
+    all_dirs = original_dirs + augmented_dirs + augmented_aggr_dirs
     print(f"Dimensione totale del dataset di training (originale + aumentato): {len(all_dirs)} campioni.")
 
     # Opzionale ma consigliato: ordina la lista finale per riproducibilità
@@ -279,7 +286,7 @@ def compute_iou_per_class(preds_np: np.ndarray, labels_np: np.ndarray, num_class
 # =============================================================================
 # 5. FUNZIONI DI TRAINING E VALIDAZIONE
 # =============================================================================
-def train_one_epoch(model, loader, optimizer, criterion, scaler, device, use_amp):
+def train_one_epoch(model, loader, optimizer, criterion, scaler, scheduler, device, use_amp):
     model.train()
     running_loss = 0.0
     progress_bar = tqdm(loader, desc="Training", leave=False)
@@ -294,6 +301,8 @@ def train_one_epoch(model, loader, optimizer, criterion, scaler, device, use_amp
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
+
+        scheduler.step()
         
         running_loss += loss.item()
         progress_bar.set_postfix(loss=f"{loss.item():.4f}")
@@ -358,13 +367,13 @@ def main():
     # Questa funzione deve essere definita sopra, come nel tuo script
     train_dirs, val_dirs = get_grouped_stratified_split(config)
     
-    # Prepara le trasformazioni
-    train_transforms = get_transforms(is_train=True, output_size=config["OUTPUT_SIZE"])
-    val_transforms = get_transforms(is_train=False, output_size=config["OUTPUT_SIZE"])
+    # MODIFICA: Prepara le trasformazioni di base (solo preprocessing)
+    # La stessa pipeline viene usata per training e validazione.
+    base_transforms = get_transforms(output_size=config["OUTPUT_SIZE"])
 
     # Crea i Dataset
-    train_dataset = SegmentationDataset(train_dirs, train_transforms)
-    val_dataset = SegmentationDataset(val_dirs, val_transforms)
+    train_dataset = SegmentationDataset(train_dirs, base_transforms)
+    val_dataset = SegmentationDataset(val_dirs, base_transforms)
     
     # Crea i DataLoader
     train_loader = DataLoader(
@@ -421,11 +430,11 @@ def main():
         print(f"\n--- Epoch {epoch+1}/{config['NUM_EPOCHS']} ---")
         
         # Le funzioni train_one_epoch e evaluate vanno definite sopra
-        train_loss = train_one_epoch(model, train_loader, optimizer, combined_loss, scaler, device, use_amp)
+        train_loss = train_one_epoch(model, train_loader, optimizer, combined_loss, scaler, scheduler, device, use_amp)
         val_loss, val_miou, val_iou_per_class = evaluate(model, val_loader, combined_loss, device, config["NUM_CLASSES"], config["IGNORE_INDEX"])
         
         # Aggiorna lo scheduler con il mIoU di validazione
-        scheduler.step(val_miou)
+        # scheduler.step(val_miou)
         
         # Salva la storia per futuri grafici
         history['train_loss'].append(train_loss)
@@ -456,4 +465,3 @@ def main():
 # =============================================================================
 if __name__ == "__main__":
     main()
-
