@@ -169,31 +169,47 @@ def get_grouped_stratified_split(config: Dict[str, Any]) -> Tuple[List[str], Lis
     image_groups = list(nx.connected_components(G))
     print(f"Trovati {len(image_groups)} gruppi di immagini.")
     
-    # --- MODIFICA CHIAVE ---
-    # Etichettatura dei gruppi basata sulla presenza di classi rare
+    # Etichettatura dei gruppi basata sulla presenza di classi rare (logica invariata)
     group_labels = []
     for group in tqdm(image_groups, desc="Etichettatura gruppi con mappa colori"):
         has_rare = False
         for p in group:
-            # Carica la maschera RGB, la converte in ID e controlla le classi
             mask_rgb = np.array(Image.open(os.path.join(p, 'labels.png')).convert("RGB"))
             mask_ids = rgb_to_class_id_mask(mask_rgb, COLOR_TO_CLASS_ID)
             unique_classes = np.unique(mask_ids)
             
             if any(rare_id in unique_classes for rare_id in config["RARE_CLASS_INDICES"]):
                 has_rare = True
-                break # Basta un'immagine con una classe rara per etichettare il gruppo
+                break
         group_labels.append(1 if has_rare else 0)
         
-    # Split stratificato (logica invariata)
+    # --- MODIFICA CHIAVE PER RISOLVERE L'ERRORE ---
+    # Controlla se la stratificazione è possibile.
+    # Calcola quanti campioni ci sono per ogni etichetta (0 e 1).
+    unique_labels, counts = np.unique(group_labels, return_counts=True)
+    
+    # Se una delle classi ha meno di 2 campioni, la stratificazione fallirà.
+    if np.any(counts < 2):
+        print("\nATTENZIONE: La stratificazione non è possibile a causa di una classe con meno di 2 campioni.")
+        print("Verrà eseguito uno split casuale semplice (non stratificato).")
+        stratify_param = None # Disabilita la stratificazione
+    else:
+        print("\nStratificazione possibile. Verrà eseguito uno split stratificato.")
+        stratify_param = group_labels # Usa le etichette per la stratificazione
+
+    # Esegui lo split usando il parametro di stratificazione calcolato
     train_groups, val_groups = train_test_split(
-        image_groups, test_size=config["VALIDATION_SPLIT"],
-        random_state=config["RANDOM_SEED"], stratify=group_labels
+        image_groups, 
+        test_size=config["VALIDATION_SPLIT"],
+        random_state=config["RANDOM_SEED"], 
+        stratify=stratify_param # Può essere 'group_labels' o 'None'
     )
+    # --- FINE MODIFICA ---
+    
     train_dirs = [p for group in train_groups for p in group]
     val_dirs = [p for group in val_groups for p in group]
     
-    print(f"Split stratificato creato: {len(train_dirs)} train, {len(val_dirs)} validation.")
+    print(f"Split creato: {len(train_dirs)} train, {len(val_dirs)} validation.")
     return train_dirs, val_dirs
 
 def create_class_balanced_sampler(sample_dirs: List[str], config: Dict[str, Any]) -> WeightedRandomSampler:
