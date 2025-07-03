@@ -23,6 +23,9 @@ from albumentations.pytorch import ToTensorV2
 import imagehash
 import networkx as nx
 from segmentation_models_pytorch.losses import FocalLoss
+import matplotlib.pyplot as plt
+import seaborn as sns
+from torch.utils.data import WeightedRandomSampler
 
 # =============================================================================
 # 2. CONFIGURAZIONE
@@ -64,6 +67,13 @@ def get_config() -> Dict[str, Any]:
         "LEARNING_RATE": 1e-4,      # Learning rate molto basso per il fine-tuning
         "WEIGHT_DECAY": 1e-5,     # Regolarizzazione L2 aumentata
     }
+
+    config["CLASS_NAMES"] = []
+    for i in range(config["NUM_CLASSES"]):
+        if i == config["IGNORE_INDEX"]:
+            config["CLASS_NAMES"].append("Ignore")
+        else:
+            config["CLASS_NAMES"].append(f"Class {i}")
     return config
 
 class SegmentationDataset(Dataset):
@@ -282,7 +292,290 @@ def compute_iou_per_class(preds_np: np.ndarray, labels_np: np.ndarray, num_class
             
     return iou_scores
 
+
+def create_colored_mask_from_indices(mask_np: np.ndarray, num_classes: int) -> Image.Image:
+    """
+    Funzione helper per creare un'immagine PIL colorata da una maschera di indici.
+    Utile per visualizzare le predizioni del modello.
+    """
+    # Usa una colormap standard e riproducibile
+    cmap = plt.get_cmap('nipy_spectral', num_classes)
+    # Normalizza gli indici per la colormap
+    norm = plt.Normalize(vmin=0, vmax=num_classes - 1)
+    # Applica la colormap per ottenere un'immagine RGBA
+    colored_mask_rgba = cmap(norm(mask_np))
+    # Converti in RGB 8-bit
+    colored_mask_rgb = (colored_mask_rgba[:, :, :3] * 255).astype(np.uint8)
+    return Image.fromarray(colored_mask_rgb)
+
+
+def show_best_worst_predictions(
+    model: nn.Module,
+    val_loader: DataLoader,
+    device: torch.device,
+    config: Dict[str, Any]
+):
+    """
+    Esegue il modello sul validation set, trova le predizioni migliori e peggiori
+    in base all'mIoU per immagine e le visualizza.
+    """
+    print("\n--- Analisi Qualitativa: Ricerca Migliore e Peggiore Predizione ---")
+    model.eval()
     
+    results = [] # Lista per salvare (miou, immagine, gt, pred) per ogni campione
+
+    with torch.no_grad():
+        for images, masks_gt in tqdm(val_loader, desc="Analisi qualitativa", leave=False):
+            images, masks_gt = images.to(device), masks_gt.to(device)
+            
+            # Ottieni le predizioni del modello
+            outputs = model(images)
+            preds = torch.argmax(outputs, dim=1)
+            
+            # Sposta i dati sulla CPU per l'analisi e la visualizzazione
+            images_cpu = images.cpu()
+            masks_gt_cpu = masks_gt.cpu().numpy()
+            preds_cpu = preds.cpu().numpy()
+            
+            # Calcola l'mIoU per ogni immagine nel batch
+            for i in range(images.size(0)):
+                iou_per_class = compute_iou_per_class(
+                    preds_cpu[i],
+                    masks_gt_cpu[i],
+                    config["NUM_CLASSES"],
+                    config["IGNORE_INDEX"]
+                )
+                # mIoU per questa singola immagine (ignorando le classi non presenti)
+                miou_image = np.nanmean(iou_per_class)
+                
+                # De-normalizza l'immagine per la visualizzazione
+                # NOTA: Assicurati che le medie e std usate qui siano le stesse
+                # usate nella tua funzione get_transforms!
+                mean = np.array([0.0017, 0.0018, 0.0017])
+                std = np.array([0.0010, 0.0010, 0.0010])
+                img_denorm = images_cpu[i].permute(1, 2, 0).numpy()
+                img_denorm = (img_denorm * std + mean)
+                # Applica il clipping per assicurarsi che i valori siano in [0, 1]
+                img_denorm = np.clip(img_denorm, 0, 1)
+
+                results.append({
+                    "miou": miou_image,
+                    "image": img_denorm,
+                    "ground_truth": masks_gt_cpu[i],
+                    "prediction": preds_cpu[i]
+                })
+
+    # Ordina i risultati in base all'mIoU
+    results.sort(key=lambda x: x["miou"])
+    
+    # Prendi il peggiore (primo) e il migliore (ultimo)
+    worst_pred = results[0]
+    best_pred = results[-1]
+    
+    # --- Visualizzazione ---
+    
+    # Prepara le maschere per la visualizzazione
+    # Usa la palette originale della GT dove possibile, e una generata per la predizione
+    gt_best_viz = create_colored_mask_from_indices(best_pred["ground_truth"], config["NUM_CLASSES"])
+    pred_best_viz = create_colored_mask_from_indices(best_pred["prediction"], config["NUM_CLASSES"])
+    
+    gt_worst_viz = create_colored_mask_from_indices(worst_pred["ground_truth"], config["NUM_CLASSES"])
+    pred_worst_viz = create_colored_mask_from_indices(worst_pred["prediction"], config["NUM_CLASSES"])
+
+    # Plot della Migliore Predizione
+    fig, axs = plt.subplots(1, 3, figsize=(18, 6))
+    fig.suptitle(f"Migliore Predizione (mIoU: {best_pred['miou']:.4f})", fontsize=16)
+    axs[0].imshow(best_pred["image"])
+    axs[0].set_title("Immagine Originale")
+    axs[0].axis('off')
+    axs[1].imshow(gt_best_viz)
+    axs[1].set_title("Ground Truth")
+    axs[1].axis('off')
+    axs[2].imshow(pred_best_viz)
+    axs[2].set_title("Predizione del Modello")
+    axs[2].axis('off')
+    plt.tight_layout()
+    plt.show()
+    
+    # Plot della Peggiore Predizione
+    fig, axs = plt.subplots(1, 3, figsize=(18, 6))
+    fig.suptitle(f"Peggiore Predizione (mIoU: {worst_pred['miou']:.4f})", fontsize=16)
+    axs[0].imshow(worst_pred["image"])
+    axs[0].set_title("Immagine Originale")
+    axs[0].axis('off')
+    axs[1].imshow(gt_worst_viz)
+    axs[1].set_title("Ground Truth")
+    axs[1].axis('off')
+    axs[2].imshow(pred_worst_viz)
+    axs[2].set_title("Predizione del Modello")
+    axs[2].axis('off')
+    plt.tight_layout()
+    plt.show()
+
+def plot_confusion_matrix(
+    model: nn.Module, 
+    loader: DataLoader, 
+    device: torch.device, 
+    config: Dict[str, Any],
+    class_names: List[str] = None
+):
+    """
+    Calcola e visualizza la matrice di confusione normalizzata per il modello.
+
+    Args:
+        model (nn.Module): Il modello addestrato da valutare.
+        loader (DataLoader): Il DataLoader contenente i dati di validazione o test.
+        device (torch.device): Il device su cui eseguire i calcoli (es. 'cuda').
+        config (Dict): Il dizionario di configurazione.
+        class_names (List[str], optional): Nomi delle classi per le etichette del grafico.
+    """
+    print("\n--- Calcolo della Matrice di Confusione ---")
+    model.eval()
+    
+    num_classes = config["NUM_CLASSES"]
+    ignore_index = config.get("IGNORE_INDEX", None) # Usa .get per sicurezza
+
+    # Inizializza la matrice di confusione su CPU o GPU
+    conf_matrix = torch.zeros(num_classes, num_classes, dtype=torch.int64, device=device)
+
+    with torch.no_grad():
+        for images, masks in tqdm(loader, desc="Generazione Matrice di Confusione", leave=False):
+            images, masks = images.to(device), masks.to(device, dtype=torch.long)
+            
+            with torch.amp.autocast(enabled=True, device_type=device.type):
+                outputs = model(images)
+            
+            preds = torch.argmax(outputs, dim=1)
+            
+            # Appiattiamo le maschere e le predizioni per un calcolo efficiente
+            masks_flat = masks.flatten()
+            preds_flat = preds.flatten()
+
+            # Rimuoviamo i pixel da ignorare
+            if ignore_index is not None:
+                valid_indices = masks_flat != ignore_index
+                masks_flat = masks_flat[valid_indices]
+                preds_flat = preds_flat[valid_indices]
+            
+            # Calcolo degli indici per la matrice di confusione.
+            # Questo è un trucco per aggiornare la matrice senza cicli for in Python.
+            # Ogni coppia (true_class, pred_class) viene mappata a un indice univoco.
+            indices = masks_flat * num_classes + preds_flat
+            
+            # Usiamo bincount per contare le occorrenze di ogni coppia
+            counts = torch.bincount(indices, minlength=num_classes**2)
+            
+            # Aggiungiamo i conteggi del batch alla matrice complessiva
+            conf_matrix += counts.reshape(num_classes, num_classes)
+
+    # Sposta la matrice finale sulla CPU e convertila in NumPy
+    conf_matrix_np = conf_matrix.cpu().numpy()
+
+    # --- Preparazione per la visualizzazione ---
+    
+    # Rimuovi la riga/colonna dell'ignore_index se esiste, per una visualizzazione più pulita
+    plot_matrix = conf_matrix_np
+    plot_class_names = class_names
+
+    if ignore_index is not None:
+        plot_matrix = np.delete(plot_matrix, ignore_index, axis=0) # Rimuovi riga
+        plot_matrix = np.delete(plot_matrix, ignore_index, axis=1) # Rimuovi colonna
+        if plot_class_names:
+            plot_class_names = [name for i, name in enumerate(class_names) if i != ignore_index]
+
+    # Normalizza la matrice per riga per ottenere le percentuali (recall per ogni classe)
+    # L'asse y (true label) mostrerà dove vanno a finire i pixel di quella classe.
+    row_sums = plot_matrix.sum(axis=1)[:, np.newaxis]
+    # Evita la divisione per zero se una classe non è mai presente nel set di validazione
+    norm_conf_matrix = np.divide(plot_matrix, row_sums, out=np.zeros_like(plot_matrix, dtype=float), where=row_sums!=0)
+
+    # --- Creazione del Grafico ---
+    plt.figure(figsize=(12, 10))
+    sns.heatmap(
+        norm_conf_matrix, 
+        annot=True,          # Mostra i valori numerici nelle celle
+        fmt=".2%",           # Formatta i valori come percentuali
+        cmap="Blues",        # Scegli una colormap (es. 'Blues', 'viridis', 'coolwarm')
+        xticklabels=plot_class_names or "auto",
+        yticklabels=plot_class_names or "auto"
+    )
+    plt.title("Matrice di Confusione Normalizzata (per Riga)")
+    plt.ylabel("Classe Vera (Ground Truth)")
+    plt.xlabel("Classe Predetta dal Modello")
+    plt.tight_layout()
+    plt.show()
+    
+
+
+def create_class_balanced_sampler(
+    sample_dirs: List[str], 
+    config: Dict[str, Any]
+) -> WeightedRandomSampler:
+    """
+    Crea un sampler che bilancia le classi campionando più spesso le immagini
+    che contengono le classi più rare.
+    """
+    print("\nCreazione del Sampler Bilanciato...")
+    
+    # 1. Etichetta ogni immagine con la sua classe più rara
+    print("  - Step 1: Analisi del contenuto di ogni maschera...")
+    labels = []
+    class_counts = np.zeros(config["NUM_CLASSES"])
+    
+    for path in tqdm(sample_dirs, desc="Etichettatura immagini", leave=False):
+        mask_path = os.path.join(path, 'labels.png')
+        mask = np.array(Image.open(mask_path))
+        unique_classes = np.unique(mask)
+        
+        # Ignora la classe 0 (background/ignore) per la decisione
+        unique_classes = unique_classes[unique_classes != config["IGNORE_INDEX"]]
+        
+        if len(unique_classes) == 0:
+            # Se un'immagine contiene solo la classe ignore, le diamo un'etichetta speciale
+            # o la trattiamo come una classe comune (es. la classe più comune del dataset)
+            labels.append(7) # Assumiamo la classe 7 come default comune
+            class_counts[7] += 1
+            continue
+            
+        # Trova la classe più rara presente in questa immagine
+        # (usiamo gli indici delle classi rare come proxy per la rarità)
+        rarest_class_in_image = -1
+        # Partiamo dalle classi più rare definite nella config
+        for rare_idx in sorted(config["RARE_CLASS_INDICES"]): 
+            if rare_idx in unique_classes:
+                rarest_class_in_image = rare_idx
+                break # Trovata la più rara, usciamo
+        
+        if rarest_class_in_image == -1:
+            # Se non ci sono classi rare, prendiamo una delle classi comuni
+            # (es. la più numerosa tra quelle presenti)
+            rarest_class_in_image = unique_classes[0] # Semplice euristica
+        
+        labels.append(rarest_class_in_image)
+        class_counts[rarest_class_in_image] += 1
+        
+    print("  - Step 2: Calcolo dei pesi per classe...")
+    # Calcola il peso per ogni classe come l'inverso della sua frequenza
+    class_weights = 1.0 / (class_counts + 1e-6) # Aggiungi epsilon per evitare divisione per zero
+    
+    # Applica il boost extra per le classi che ci interessano di più
+    for idx in config["RARE_CLASS_INDICES"]:
+        class_weights[idx] *= config["RARE_BOOST_FACTOR"]
+
+    print("  - Step 3: Assegnazione del peso a ogni campione...")
+    # Assegna a ogni campione il peso della sua classe-etichetta
+    sample_weights = [class_weights[label] for label in labels]
+    
+    # 4. Crea e restituisci il sampler
+    sampler = WeightedRandomSampler(
+        weights=torch.DoubleTensor(sample_weights),
+        num_samples=len(sample_weights),
+        replacement=True # Permette di campionare la stessa immagine più volte in un'epoca
+    )
+    print("Sampler Bilanciato creato con successo.")
+    return sampler
+
+
 # =============================================================================
 # 5. FUNZIONI DI TRAINING E VALIDAZIONE
 # =============================================================================
@@ -375,11 +668,15 @@ def main():
     train_dataset = SegmentationDataset(train_dirs, base_transforms)
     val_dataset = SegmentationDataset(val_dirs, base_transforms)
     
+    # Crea il sampler SOLO per il training set!
+    train_sampler = create_class_balanced_sampler(train_dirs, config)
+
     # Crea i DataLoader
     train_loader = DataLoader(
         train_dataset, 
         batch_size=config["BATCH_SIZE"], 
-        shuffle=True,
+        sampler=train_sampler,  # Usa il sampler bilanciato
+        shuffle=False,
         num_workers=config["NUM_WORKERS_TRAIN"], 
         pin_memory=True
     )
@@ -454,6 +751,14 @@ def main():
             best_iou = val_miou
             torch.save(model.state_dict(), config["MODEL_SAVE_PATH"])
             print(f"\n>>> 🎉 Nuovo modello migliore salvato! mIoU: {best_iou:.4f} <<<\n")
+
+        # --- NUOVA SEZIONE: ANALISI QUALITATIVA FINALE ---
+        # Carica il miglior modello salvato per l'analisi
+        print("\nCaricamento del miglior modello per l'analisi finale...")
+        model.load_state_dict(torch.load(config["MODEL_SAVE_PATH"]))
+        
+        # Mostra i risultati migliori e peggiori sul validation set
+        show_best_worst_predictions(model, val_loader, device, config)
 
     print(f"\n--- Addestramento Completato ---")
     print(f"Miglior mIoU di validazione ottenuto: {best_iou:.4f}")
