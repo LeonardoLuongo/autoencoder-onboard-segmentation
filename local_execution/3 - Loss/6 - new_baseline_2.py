@@ -164,13 +164,18 @@ class CombinedDiceFocalLoss(nn.Module):
     """Combina Dice Loss e Focal Loss."""
     def __init__(self, dice_weight=0.5, focal_weight=0.5, focal_gamma=2.0):
         super().__init__()
+        # DiceLoss necessita dell'argomento esplicito
         self.dice = DiceLoss(mode='multiclass', from_logits=True)
-        self.focal = FocalLoss(mode='multiclass', gamma=focal_gamma, from_logits=True)
+        # FocalLoss assume già i logits, quindi l'argomento non serve e non esiste
+        self.focal = FocalLoss(mode='multiclass', gamma=focal_gamma) # <-- MODIFICA QUI
         self.dice_weight = dice_weight
         self.focal_weight = focal_weight
 
     def forward(self, pred, target):
-        return self.dice_weight * self.dice(pred, target) + self.focal_weight * self.focal(pred, target)
+        dice_loss_val = self.dice(pred, target)
+        focal_loss_val = self.focal(pred, target)
+        return self.dice_weight * dice_loss_val + self.focal_weight * focal_loss_val
+    
 
 def compute_iou(preds, labels, num_classes, ignore_index):
     iou_per_class = np.zeros(num_classes)
