@@ -214,7 +214,7 @@ def main():
     model = get_model(config).to(device)
     criterion = TverskyLoss(mode='multiclass', from_logits=True, ignore_index=config["IGNORE_INDEX_SPECIALIST"]).to(device)
     optimizer = optim.Adam(model.parameters(), lr=config["LEARNING_RATE"], weight_decay=config["WEIGHT_DECAY"])
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5, verbose=True)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5)
     scaler = GradScaler(enabled=config["USE_AMP"])
 
     best_iou = -1.0
@@ -244,3 +244,210 @@ def main():
 # =============================================================================
 if __name__ == "__main__":
     main()
+
+
+'''
+Risultati Epoch 1: Train Loss: 0.3951 | Val Loss: 0.5638 | Val mIoU: 0.3637                                                                                                       
+    - IoU Spec_Rough: 0.0128
+    - IoU Spec_Smooth: 0.6581
+    - IoU Spec_LowVeg: 0.1699
+    - IoU Spec_Puddle: 0.6139
+
+>>> 🎉 Nuovo modello specialista migliore salvato! mIoU: 0.3637 <<<
+
+--- Epoch 2/25 ---
+Risultati Epoch 2: Train Loss: 0.3316 | Val Loss: 0.4882 | Val mIoU: 0.4247                                                                                                       
+    - IoU Spec_Rough: 0.0406
+    - IoU Spec_Smooth: 0.7027
+    - IoU Spec_LowVeg: 0.3344
+    - IoU Spec_Puddle: 0.6211
+
+>>> 🎉 Nuovo modello specialista migliore salvato! mIoU: 0.4247 <<<
+
+--- Epoch 3/25 ---
+Risultati Epoch 3: Train Loss: 0.3121 | Val Loss: 0.4247 | Val mIoU: 0.4983                                                                                                       
+    - IoU Spec_Rough: 0.0861
+    - IoU Spec_Smooth: 0.7858
+    - IoU Spec_LowVeg: 0.3714
+    - IoU Spec_Puddle: 0.7497
+
+>>> 🎉 Nuovo modello specialista migliore salvato! mIoU: 0.4983 <<<
+
+--- Epoch 4/25 ---
+Risultati Epoch 4: Train Loss: 0.3043 | Val Loss: 0.4071 | Val mIoU: 0.5140                                                                                                       
+    - IoU Spec_Rough: 0.1607
+    - IoU Spec_Smooth: 0.7665
+    - IoU Spec_LowVeg: 0.3795
+    - IoU Spec_Puddle: 0.7491
+
+>>> 🎉 Nuovo modello specialista migliore salvato! mIoU: 0.5140 <<<
+
+--- Epoch 5/25 ---
+Risultati Epoch 5: Train Loss: 0.2998 | Val Loss: 0.4363 | Val mIoU: 0.4827                                                                                                       
+    - IoU Spec_Rough: 0.0808
+    - IoU Spec_Smooth: 0.7477
+    - IoU Spec_LowVeg: 0.3614
+    - IoU Spec_Puddle: 0.7410
+
+--- Epoch 6/25 ---
+Risultati Epoch 6: Train Loss: 0.2922 | Val Loss: 0.4110 | Val mIoU: 0.4863                                                                                                       
+    - IoU Spec_Rough: 0.1853
+    - IoU Spec_Smooth: 0.6775
+    - IoU Spec_LowVeg: 0.3871
+    - IoU Spec_Puddle: 0.6953
+
+--- Epoch 7/25 ---
+Risultati Epoch 7: Train Loss: 0.3028 | Val Loss: 0.3848 | Val mIoU: 0.5359                                                                                                       
+    - IoU Spec_Rough: 0.2913
+    - IoU Spec_Smooth: 0.7616
+    - IoU Spec_LowVeg: 0.3532
+    - IoU Spec_Puddle: 0.7377
+
+>>> 🎉 Nuovo modello specialista migliore salvato! mIoU: 0.5359 <<<
+
+--- Epoch 8/25 ---
+Risultati Epoch 8: Train Loss: 0.2815 | Val Loss: 0.3716 | Val mIoU: 0.5411                                                                                                       
+    - IoU Spec_Rough: 0.2463
+    - IoU Spec_Smooth: 0.7656
+    - IoU Spec_LowVeg: 0.4186
+    - IoU Spec_Puddle: 0.7339
+
+>>> 🎉 Nuovo modello specialista migliore salvato! mIoU: 0.5411 <<<
+
+--- Epoch 9/25 ---
+Risultati Epoch 9: Train Loss: 0.2675 | Val Loss: 0.4429 | Val mIoU: 0.4819                                                                                                       
+    - IoU Spec_Rough: 0.0560
+    - IoU Spec_Smooth: 0.7503
+    - IoU Spec_LowVeg: 0.3821
+    - IoU Spec_Puddle: 0.7394
+
+--- Epoch 10/25 ---
+Risultati Epoch 10: Train Loss: 0.2942 | Val Loss: 0.4006 | Val mIoU: 0.5192                                                                                                      
+    - IoU Spec_Rough: 0.1763
+    - IoU Spec_Smooth: 0.7728
+    - IoU Spec_LowVeg: 0.3987
+    - IoU Spec_Puddle: 0.7291
+
+--- Epoch 11/25 ---
+Risultati Epoch 11: Train Loss: 0.2700 | Val Loss: 0.3814 | Val mIoU: 0.5387                                                                                                      
+    - IoU Spec_Rough: 0.2384
+    - IoU Spec_Smooth: 0.7657
+    - IoU Spec_LowVeg: 0.4018
+    - IoU Spec_Puddle: 0.7488
+
+--- Epoch 12/25 ---
+Risultati Epoch 12: Train Loss: 0.2732 | Val Loss: 0.4431 | Val mIoU: 0.4747                                                                                                      
+    - IoU Spec_Rough: 0.1759
+    - IoU Spec_Smooth: 0.6460
+    - IoU Spec_LowVeg: 0.3541
+    - IoU Spec_Puddle: 0.7227
+
+--- Epoch 13/25 ---
+Risultati Epoch 13: Train Loss: 0.2601 | Val Loss: 0.3290 | Val mIoU: 0.5967                                                                                                      
+    - IoU Spec_Rough: 0.3961
+    - IoU Spec_Smooth: 0.7824
+    - IoU Spec_LowVeg: 0.4306
+    - IoU Spec_Puddle: 0.7775
+
+>>> 🎉 Nuovo modello specialista migliore salvato! mIoU: 0.5967 <<<
+
+--- Epoch 14/25 ---
+Risultati Epoch 14: Train Loss: 0.2470 | Val Loss: 0.3103 | Val mIoU: 0.6138                                                                                                      
+    - IoU Spec_Rough: 0.4067
+    - IoU Spec_Smooth: 0.8101
+    - IoU Spec_LowVeg: 0.4465
+    - IoU Spec_Puddle: 0.7918
+
+>>> 🎉 Nuovo modello specialista migliore salvato! mIoU: 0.6138 <<<
+
+--- Epoch 15/25 ---
+Risultati Epoch 15: Train Loss: 0.2431 | Val Loss: 0.3045 | Val mIoU: 0.6204                                                                                                      
+    - IoU Spec_Rough: 0.4420
+    - IoU Spec_Smooth: 0.8053
+    - IoU Spec_LowVeg: 0.4631
+    - IoU Spec_Puddle: 0.7714
+
+>>> 🎉 Nuovo modello specialista migliore salvato! mIoU: 0.6204 <<<
+
+--- Epoch 16/25 ---
+Risultati Epoch 16: Train Loss: 0.2394 | Val Loss: 0.2998 | Val mIoU: 0.6218                                                                                                      
+    - IoU Spec_Rough: 0.4651
+    - IoU Spec_Smooth: 0.8101
+    - IoU Spec_LowVeg: 0.4587
+    - IoU Spec_Puddle: 0.7535
+
+>>> 🎉 Nuovo modello specialista migliore salvato! mIoU: 0.6218 <<<
+
+--- Epoch 17/25 ---
+Risultati Epoch 17: Train Loss: 0.2385 | Val Loss: 0.3337 | Val mIoU: 0.5966                                                                                                      
+    - IoU Spec_Rough: 0.4861
+    - IoU Spec_Smooth: 0.8172
+    - IoU Spec_LowVeg: 0.3392
+    - IoU Spec_Puddle: 0.7439
+
+--- Epoch 18/25 ---
+Risultati Epoch 18: Train Loss: 0.2349 | Val Loss: 0.2944 | Val mIoU: 0.6407                                                                                                      
+    - IoU Spec_Rough: 0.4691
+    - IoU Spec_Smooth: 0.8107
+    - IoU Spec_LowVeg: 0.4837
+    - IoU Spec_Puddle: 0.7992
+
+>>> 🎉 Nuovo modello specialista migliore salvato! mIoU: 0.6407 <<<
+
+--- Epoch 19/25 ---
+Risultati Epoch 19: Train Loss: 0.2245 | Val Loss: 0.2953 | Val mIoU: 0.6358                                                                                                      
+    - IoU Spec_Rough: 0.4600
+    - IoU Spec_Smooth: 0.8038
+    - IoU Spec_LowVeg: 0.4828
+    - IoU Spec_Puddle: 0.7965
+
+--- Epoch 20/25 ---
+Risultati Epoch 20: Train Loss: 0.2296 | Val Loss: 0.3208 | Val mIoU: 0.6121                                                                                                      
+    - IoU Spec_Rough: 0.3701
+    - IoU Spec_Smooth: 0.8326
+    - IoU Spec_LowVeg: 0.4523
+    - IoU Spec_Puddle: 0.7935
+
+--- Epoch 21/25 ---
+Risultati Epoch 21: Train Loss: 0.2356 | Val Loss: 0.2967 | Val mIoU: 0.6215                                                                                                      
+    - IoU Spec_Rough: 0.4506
+    - IoU Spec_Smooth: 0.7428
+    - IoU Spec_LowVeg: 0.5002
+    - IoU Spec_Puddle: 0.7924
+
+--- Epoch 22/25 ---
+Risultati Epoch 22: Train Loss: 0.2245 | Val Loss: 0.2896 | Val mIoU: 0.6460                                                                                                      
+    - IoU Spec_Rough: 0.4688
+    - IoU Spec_Smooth: 0.8227
+    - IoU Spec_LowVeg: 0.4960
+    - IoU Spec_Puddle: 0.7966
+
+>>> 🎉 Nuovo modello specialista migliore salvato! mIoU: 0.6460 <<<
+
+--- Epoch 23/25 ---
+Risultati Epoch 23: Train Loss: 0.2209 | Val Loss: 0.2933 | Val mIoU: 0.6378                                                                                                      
+    - IoU Spec_Rough: 0.4860
+    - IoU Spec_Smooth: 0.8030
+    - IoU Spec_LowVeg: 0.4710
+    - IoU Spec_Puddle: 0.7912
+
+--- Epoch 24/25 ---
+Risultati Epoch 24: Train Loss: 0.2148 | Val Loss: 0.2964 | Val mIoU: 0.6411                                                                                                      
+    - IoU Spec_Rough: 0.5079
+    - IoU Spec_Smooth: 0.8180
+    - IoU Spec_LowVeg: 0.4433
+    - IoU Spec_Puddle: 0.7950
+
+--- Epoch 25/25 ---
+Risultati Epoch 25: Train Loss: 0.2171 | Val Loss: 0.2993 | Val mIoU: 0.6398                                                                                                      
+    - IoU Spec_Rough: 0.4391
+    - IoU Spec_Smooth: 0.8271
+    - IoU Spec_LowVeg: 0.4945
+    - IoU Spec_Puddle: 0.7985
+
+--- Training Specialista Completato ---
+Miglior mIoU ottenuto: 0.6460
+Modello salvato in: ./best_specialist_model.pth
+
+
+'''
