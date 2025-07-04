@@ -80,13 +80,80 @@ def get_config() -> Dict[str, Any]:
     
     # FIX: Nomi delle classi anonimi come da richiesta
     config["CLASS_NAMES"] = ["Ignored"] + [f"Classe {i}" for i in range(1, config["NUM_CLASSES"])]
+
+    output_size = config["OUTPUT_SIZE"]
+    paths = {"original": config["DATASET_PATH_TRAIN"], "augmented": config["DATASET_PATH_AUG"], "aggressive": config["DATASET_PATH_AUG_AGGR"]}
+    all_dirs = []
+    tqdm.write("Caricamento percorsi dei dataset..."); 
+    for key, path in paths.items():
+        if not os.path.isdir(path):
+            tqdm.write(f"Attenzione: il percorso '{path}' non esiste, verrà saltato."); continue
+        dirs = [d for d in glob.glob(os.path.join(path, "*")) if os.path.isdir(d)]; tqdm.write(f"Trovati {len(dirs)} campioni in '{key}'."); all_dirs.extend(dirs)
+    if not all_dirs: raise FileNotFoundError("Nessuna directory di dati trovata.")
+    all_dirs = sorted(list(set(all_dirs)))
+
+    config["MEAN"], config["STD"] = calculate_mean_std(SegmentationDataset(
+        sample_dirs=glob.glob(os.path.join("./dataset/training/train", "*")),
+        transform=A.Compose([A.Resize(height=output_size[0], width=output_size[1], interpolation=cv2.INTER_NEAREST), ToTensorV2()]),
+        config={"NUM_CLASSES": 9, "IGNORE_INDEX": 0}
+    ))
+
+    tqdm.write(f"Media per canale: {config['MEAN']}, Deviazione Standard per canale: {config['STD']}")
     return config
 
 # =============================================================================
 # 4. DATA AUGMENTATION & GESTIONE DATI
 # =============================================================================
-def get_train_transforms(output_size: Tuple[int, int]) -> A.Compose:
+
+def calculate_mean_std(loader: DataLoader) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Calcola la media e la deviazione standard per canale su un intero dataset.
+
+    Args:
+        loader (DataLoader): DataLoader che fornisce le immagini come tensori
+                             in scala [0, 1] e con forma (B, C, H, W).
+                             IMPORTANTE: Il loader non deve applicare la normalizzazione.
+
+    Returns:
+        Tuple[np.ndarray, np.ndarray]: Una tupla contenente (mean, std).
+    """
+    tqdm.write("Calcolo di media e deviazione standard in corso. Potrebbe richiedere tempo...")
+    
+    psum = torch.tensor([0.0, 0.0, 0.0])
+    psum_sq = torch.tensor([0.0, 0.0, 0.0])
+    pixel_count = 0
+
+    # Itera sul dataset
+    for images, _ in tqdm(loader, desc="Analisi Statistiche Dataset"):
+        # Le immagini dovrebbero essere (B, 3, H, W) e in scala [0, 1]
+        batch_size, num_channels, height, width = images.shape
+        
+        # Somma i valori dei pixel per canale
+        psum += images.sum(axis=[0, 2, 3])
+        # Somma i quadrati dei valori dei pixel per canale
+        psum_sq += (images ** 2).sum(axis=[0, 2, 3])
+        # Conta il numero totale di pixel
+        pixel_count += batch_size * height * width
+
+    # Calcola la media e la deviazione standard finale
+    total_mean = psum / pixel_count
+    total_var = (psum_sq / pixel_count) - (total_mean ** 2)
+    total_std = torch.sqrt(total_var)
+
+    mean_np = total_mean.numpy()
+    std_np = total_std.numpy()
+
+    tqdm.write("\n--- Statistiche Dataset Calcolate ---")
+    tqdm.write(f"Media per canale (R, G, B): {mean_np}")
+    tqdm.write(f"Deviazione Standard per canale (R, G, B): {std_np}")
+    tqdm.write("Copia questi valori nella tua pipeline di trasformazione `A.Normalize`.")
+    
+    return mean_np, std_np
+
+def get_train_transforms(config: Dict[str, Any]) -> A.Compose:
     """Pipeline di augmentation AGGRESSIVA per risolvere le confusioni specifiche."""
+    
+    output_size = config["OUTPUT_SIZE"]
     return A.Compose([
         A.Resize(height=output_size[0], width=output_size[1], interpolation=cv2.INTER_NEAREST),
         A.HorizontalFlip(p=0.5),
@@ -98,15 +165,15 @@ def get_train_transforms(output_size: Tuple[int, int]) -> A.Compose:
         A.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1, p=0.8), 
         # Aggiunto per forzare il modello a usare il contesto
         A.CoarseDropout(max_holes=16, max_height=32, max_width=32, min_holes=8, p=0.5), 
-        A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        A.Normalize(mean=config["MEAN"], std=config["STD"]),
         ToTensorV2(),
     ])
 
-def get_val_transforms(output_size: Tuple[int, int]) -> A.Compose:
+def get_val_transforms(output_size: Tuple[int, int], mean: float, std: float) -> A.Compose:
     """Pipeline di validazione (solo preprocessing)."""
     return A.Compose([
         A.Resize(height=output_size[0], width=output_size[1], interpolation=cv2.INTER_NEAREST),
-        A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        A.Normalize(mean=mean, std=std),
         ToTensorV2(),
     ])
 
@@ -214,8 +281,8 @@ def main():
 
     train_dirs, val_dirs = get_grouped_stratified_split(config)
     # Pipeline di augmentation diverse per training e validazione
-    train_transforms = get_train_transforms(config["OUTPUT_SIZE"])
-    val_transforms = get_val_transforms(config["OUTPUT_SIZE"])
+    train_transforms = get_train_transforms(config["OUTPUT_SIZE"], config["MEAN"], config["STD"])
+    val_transforms = get_val_transforms(config["OUTPUT_SIZE"], config["MEAN"], config["STD"])
     
     train_dataset = SegmentationDataset(train_dirs, train_transforms, config)
     val_dataset = SegmentationDataset(val_dirs, val_transforms, config)
