@@ -37,6 +37,8 @@ import segmentation_models_pytorch as smp
 from segmentation_models_pytorch.losses import DiceLoss, FocalLoss
 import matplotlib.pyplot as plt
 import seaborn as sns
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
 
 # =============================================================================
 # 2. RIPRODUCIBILITÀ E CONFIGURAZIONE
@@ -62,7 +64,100 @@ def get_config() -> Dict[str, Any]:
         "NUM_EPOCHS": 25, "LEARNING_RATE": 1e-3, "WEIGHT_DECAY": 1e-5,
     }
     config["CLASS_NAMES_SPECIALIST"] = ["Spec_Class2", "Spec_Class3", "Spec_Class6", "Spec_Class7"]
+
+    # --- CALCOLO CORRETTO DI MEDIA E DEVIAZIONE STANDARD SU TUTTO IL DATASET ---
+    tqdm.write("Preparazione per il calcolo delle statistiche del dataset...")
+    
+    # 1. Pipeline di trasformazione che scala a [0, 1] ma non normalizza
+    stats_transforms = A.Compose([
+        A.Resize(height=config["OUTPUT_SIZE"][0], width=config["OUTPUT_SIZE"][1]),
+        A.Normalize(mean=(0.0, 0.0, 0.0), std=(1.0, 1.0, 1.0), max_pixel_value=255.0),
+        ToTensorV2(),
+    ])
+
+    # 2. Crea una lista di TUTTE le directory del dataset (train + aug + aug_aggr)
+    tqdm.write("Caricamento percorsi di TUTTI i dataset per le statistiche...")
+    paths = {
+        "original": config["DATASET_PATH_TRAIN"],
+        "augmented": config["DATASET_PATH_AUG"],
+        "aggressive": config["DATASET_PATH_AUG_AGGR"],
+    }
+    all_dirs_for_stats = []
+    for key, path in paths.items():
+        if not os.path.isdir(path):
+            tqdm.write(f"Attenzione: il percorso '{path}' non esiste, verrà saltato per le statistiche.")
+            continue
+        dirs = [d for d in glob.glob(os.path.join(path, "*")) if os.path.isdir(d)]
+        all_dirs_for_stats.extend(dirs)
+    
+    # Rimuovi eventuali duplicati e ordina
+    all_dirs_for_stats = sorted(list(set(all_dirs_for_stats)))
+    tqdm.write(f"Trovati {len(all_dirs_for_stats)} campioni totali per il calcolo delle statistiche.")
+
+    # 3. Crea un Dataset temporaneo usando TUTTI i dati
+    stats_dataset = SubproblemDataset(
+        sample_dirs=all_dirs_for_stats,
+        transform=stats_transforms,
+        config=config,
+        filter_data=False  # Cruciale: non filtrare, usa tutte le immagini
+    )
+
+    # 4. Avvolgi il Dataset in un DataLoader
+    stats_loader = DataLoader(
+        stats_dataset, 
+        batch_size=config["BATCH_SIZE"] * 2,
+        shuffle=False, 
+        num_workers=config["NUM_WORKERS"]
+    )
+    
+    # 5. Ora chiama la funzione con il DataLoader
+    mean, std = calculate_mean_std(stats_loader)
+
+    # Asserzioni di sicurezza
+    assert 0.0 <= mean.min() and mean.max() <= 1.0,  f"La media calcolata ({mean}) è fuori dal range atteso [0, 1]."
+    assert 0.0 <  std.min()  and std.max()  <  1.0,  f"La deviazione standard calcolata ({std}) è anomala."
+    
+    # 6. Salva i valori calcolati nella configurazione
+    config["MEAN"] = mean
+    config["STD"] = std
+
+    tqdm.write("Statistiche personalizzate calcolate e caricate nella configurazione.")
     return config
+
+
+def calculate_mean_std(loader: DataLoader) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Calcola la media e la deviazione standard per canale su un intero dataset.
+    È numericamente stabile.
+    """
+    tqdm.write("Calcolo di media e deviazione standard in corso...")
+    
+    psum = torch.tensor([0.0, 0.0, 0.0])
+    psum_sq = torch.tensor([0.0, 0.0, 0.0])
+    pixel_count = 0
+
+    for images, _ in tqdm(loader, desc="Analisi Statistiche Dataset"):
+        batch_size, num_channels, height, width = images.shape
+        psum += images.sum(axis=[0, 2, 3])
+        psum_sq += (images ** 2).sum(axis=[0, 2, 3])
+        pixel_count += batch_size * height * width
+
+    total_mean = psum / pixel_count
+    total_var = (psum_sq / pixel_count) - (total_mean ** 2)
+    
+    # --- FIX PER LA STABILITÀ NUMERICA ---
+    # Assicura che la varianza non sia mai negativa a causa di errori di precisione.
+    # Usiamo un minimo piccolo e positivo per evitare anche sqrt(0).
+    total_std = torch.sqrt(torch.clamp(total_var, min=1e-6))
+
+    mean_np = total_mean.numpy()
+    std_np = total_std.numpy()
+
+    tqdm.write("\n--- Statistiche Dataset Calcolate ---")
+    tqdm.write(f"Media per canale (R, G, B): {mean_np}")
+    tqdm.write(f"Deviazione Standard per canale (R, G, B): {std_np}")
+    
+    return mean_np, std_np
 
 # =============================================================================
 # 3. DATASET SPECIALIZZATO E CALCOLO PESI
@@ -91,7 +186,7 @@ class SubproblemDataset(Dataset):
 
 def get_transforms(config: Dict[str, Any], is_train: bool) -> A.Compose:
     # ... (invariato) ...
-    mean_std = ([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    mean_std = (config["MEAN"], config["STD"])
     if is_train: return A.Compose([A.Resize(height=config["OUTPUT_SIZE"][0], width=config["OUTPUT_SIZE"][1], interpolation=cv2.INTER_NEAREST), A.HorizontalFlip(p=0.5), A.VerticalFlip(p=0.5), A.ShiftScaleRotate(p=0.5), A.ColorJitter(p=0.5), A.CoarseDropout(p=0.3), A.Normalize(mean=mean_std[0], std=mean_std[1]), ToTensorV2()])
     else: return A.Compose([A.Resize(height=config["OUTPUT_SIZE"][0], width=config["OUTPUT_SIZE"][1], interpolation=cv2.INTER_NEAREST), A.Normalize(mean=mean_std[0], std=mean_std[1]), ToTensorV2()])
 
@@ -207,7 +302,7 @@ def main():
     model = get_model(config).to(device)
     criterion = CombinedSpecialistLoss(class_weights=class_weights, config=config)
     optimizer = optim.Adam(model.parameters(), lr=config["LEARNING_RATE"], weight_decay=config["WEIGHT_DECAY"])
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5, verbose=True)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5)
     scaler = GradScaler(enabled=config["USE_AMP"])
 
     best_iou = -1.0; best_conf_matrix = None;
