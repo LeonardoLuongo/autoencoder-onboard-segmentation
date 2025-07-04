@@ -88,6 +88,7 @@ def get_config() -> Dict[str, Any]:
     stats_transforms = A.Compose([
         A.Resize(height=config["OUTPUT_SIZE"][0], width=config["OUTPUT_SIZE"][1]),
         # ToTensorV2 è fondamentale perché scala le immagini da [0, 255] a [0, 1]
+        A.Normalize(mean=(0.0, 0.0, 0.0), std=(1.0, 1.0, 1.0), max_pixel_value=255.0),
         ToTensorV2(),
     ])
 
@@ -109,6 +110,9 @@ def get_config() -> Dict[str, Any]:
     
     # 4. Ora chiama la funzione con il DataLoader
     mean, std = calculate_mean_std(stats_loader)
+
+    assert 0.0 <= mean.min() and mean.max() <= 1.0,  "Mean fuori range 0-1"
+    assert 0.0 <  std.min()  and std.max()  <  1.0,  "Std anomala"
     
     # 5. Salva i valori calcolati nella configurazione
     config["MEAN"] = mean
