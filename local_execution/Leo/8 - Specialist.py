@@ -205,6 +205,100 @@ def calculate_specialist_weights(loader: DataLoader, config: Dict[str, Any]) -> 
     return weights_tensor
 
 # =============================================================================
+# 3. ARCHITETTURA UNetMicro E BLOCCHI
+# =============================================================================
+class DoubleConv(nn.Module):
+    """(Convolution => BatchNorm => ReLU) * 2"""
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.double_conv = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True)
+        )
+
+    def forward(self, x):
+        return self.double_conv(x)
+
+class Down(nn.Module):
+    """Downscaling con MaxPool2d seguito da DoubleConv"""
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.maxpool_conv = nn.Sequential(
+            nn.MaxPool2d(2),
+            DoubleConv(in_channels, out_channels)
+        )
+
+    def forward(self, x):
+        return self.maxpool_conv(x)
+
+class Up(nn.Module):
+    """Upscaling (con ConvTranspose2d) seguito da DoubleConv"""
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        # Usiamo ConvTranspose2d per l'upsampling, che è un layer addestrabile
+        self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)
+        self.conv = DoubleConv(in_channels, out_channels)
+
+    def forward(self, x1, x2):
+        # x1 è il tensore dal percorso di upscaling
+        # x2 è la skip connection dal percorso di encoding
+        x1 = self.up(x1)
+        # Concatena la skip connection con il tensore upscalato
+        x = torch.cat([x2, x1], dim=1)
+        return self.conv(x)
+
+class OutConv(nn.Module):
+    """Convoluzione 1x1 finale per mappare ai canali delle classi"""
+    def __init__(self, in_channels, out_channels):
+        super(OutConv, self).__init__()
+        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=1)
+
+    def forward(self, x):
+        return self.conv(x)
+
+
+class UNetMicro(nn.Module):
+    def __init__(self, n_channels, n_classes):
+        super(UNetMicro, self).__init__()
+        self.n_channels = n_channels
+        self.n_classes = n_classes
+
+        # Canali di base molto più piccoli
+        self.inc = DoubleConv(n_channels, 16)
+        self.down1 = Down(16, 32)
+        self.down2 = Down(32, 64)
+        # Rimuoviamo anche il terzo stadio di downsampling per ora
+        # self.down3 = Down(64, 128) 
+        
+        # Il punto più profondo ora ha 64 canali
+        
+        # Decoder
+        # self.up1 = Up(128, 64)
+        self.up2 = Up(64, 32)
+        self.up3 = Up(32, 16)
+        self.outc = OutConv(16, n_classes)
+
+    def forward(self, x):
+        # Percorso dell'encoder
+        x1 = self.inc(x)
+        x2 = self.down1(x1)
+        x3 = self.down2(x2)
+        # x4 = self.down3(x3)
+        
+        # Percorso del decoder
+        # x = self.up1(x4, x3)
+        x = self.up2(x3, x2) # Parte da x3, la skip è x2
+        x = self.up3(x, x1)  # Continua con x1
+        
+        logits = self.outc(x)
+        return logits
+
+
+# =============================================================================
 # 4. MODELLO E LOSS IBRIDA
 # =============================================================================
 class CombinedSpecialistLoss(nn.Module):
@@ -217,8 +311,7 @@ class CombinedSpecialistLoss(nn.Module):
     def forward(self, pred, target): return 0.3 * self.ce(pred, target) + 0.4 * self.dice(pred, target) + 0.3 * self.focal(pred, target)
 
 def get_model(config: Dict[str, Any]) -> nn.Module:
-    # ... (invariato) ...
-    model = smp.Unet(encoder_name=config["ENCODER"], encoder_weights=config["ENCODER_WEIGHTS"], in_channels=3, classes=config["NUM_SPECIALIST_CLASSES"])
+    model = UNetMicro(n_channels=3, n_classes=1).to(config["DEVICE"])
     tqdm.write(f"Creazione del MODELLO SPECIALISTA: U-Net con encoder '{config['ENCODER']}'"); return model
 
 # =============================================================================
