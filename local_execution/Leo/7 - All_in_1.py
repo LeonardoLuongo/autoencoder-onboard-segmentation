@@ -16,7 +16,7 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 
 try:
-    from torch.cuda.amp import GradScaler, autocast
+    from torch.amp import GradScaler, autocast
     AMP_AVAILABLE = True
 except ImportError:
     AMP_AVAILABLE = False
@@ -63,7 +63,7 @@ def get_config() -> Dict[str, Any]:
     base_path = "./"
     config = {
         "DEVICE": torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
-        "RANDOM_SEED": 42, "NUM_WORKERS": 0, "USE_AMP": True,
+        "RANDOM_SEED": 42, "NUM_WORKERS_TRAIN": 2, "NUM_WORKERS_VAL": 2, "USE_AMP": True,
         
         "DATASET_PATH_TRAIN": os.path.join(base_path, "dataset/training/train"),
         "DATASET_PATH_AUG": os.path.join(base_path, "dataset/training/augmented"),
@@ -221,8 +221,8 @@ def main():
     val_dataset = SegmentationDataset(val_dirs, val_transforms, config)
     
     pin_mem = device.type == 'cuda'
-    train_loader = DataLoader(train_dataset, batch_size=config["BATCH_SIZE"], shuffle=True, num_workers=config["NUM_WORKERS"], pin_memory=pin_mem)
-    val_loader = DataLoader(val_dataset, batch_size=config["BATCH_SIZE"], shuffle=False, num_workers=config["NUM_WORKERS"], pin_memory=pin_mem)
+    train_loader = DataLoader(train_dataset, batch_size=config["BATCH_SIZE"], shuffle=True, num_workers=config["NUM_WORKERS_TRAIN"], pin_memory=pin_mem)
+    val_loader = DataLoader(val_dataset, batch_size=config["BATCH_SIZE"], shuffle=False, num_workers=config["NUM_WORKERS_VAL"], pin_memory=pin_mem)
 
     model = get_model(config).to(device)
     scaler = GradScaler(enabled=use_amp)
@@ -234,7 +234,7 @@ def main():
     tqdm.write("\n--- INIZIO FASE 1: TRAINING DEL DECODER (ENCODER CONGELATO) ---")
     for param in model.encoder.parameters(): param.requires_grad = False
     optimizer = optim.Adam(list(model.decoder.parameters()) + list(model.segmentation_head.parameters()), lr=config["LR_HEAD"], weight_decay=config["WEIGHT_DECAY"])
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=2, factor=0.5, verbose=True)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=2, factor=0.5)
 
     for epoch in range(config["FREEZE_EPOCHS"]):
         global_epoch += 1; tqdm.write(f"\n--- Fase 1 / Epoch {epoch+1}/{config['FREEZE_EPOCHS']} (Global: {global_epoch}) ---")
@@ -251,7 +251,7 @@ def main():
     tqdm.write("\n--- INIZIO FASE 2: FINE-TUNING DELL'INTERA RETE (ENCODER SCONGELATO) ---")
     for param in model.encoder.parameters(): param.requires_grad = True
     optimizer = optim.Adam(model.parameters(), lr=config["LR_FULL"], weight_decay=config["WEIGHT_DECAY"])
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5, cooldown=1, min_lr=1e-7, verbose=True)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5, cooldown=1, min_lr=1e-7)
     
     for epoch in range(config["UNFREEZE_EPOCHS"]):
         global_epoch += 1; tqdm.write(f"\n--- Fase 2 / Epoch {epoch+1}/{config['UNFREEZE_EPOCHS']} (Global: {global_epoch}) ---")
