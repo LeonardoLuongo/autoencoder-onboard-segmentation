@@ -287,7 +287,7 @@ def main():
     train_dirs, val_dirs = get_grouped_stratified_split(config)
     # Pipeline di augmentation diverse per training e validazione
     train_transforms = get_train_transforms(config)
-    val_transforms = get_val_transforms(config)
+    val_transforms = get_val_transforms(config["oUTPUT_SIZE"], config["MEAN"], config["STD"])
     
     train_dataset = SegmentationDataset(train_dirs, train_transforms, config)
     val_dataset = SegmentationDataset(val_dirs, val_transforms, config)
