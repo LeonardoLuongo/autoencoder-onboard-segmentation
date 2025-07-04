@@ -81,24 +81,39 @@ def get_config() -> Dict[str, Any]:
     # FIX: Nomi delle classi anonimi come da richiesta
     config["CLASS_NAMES"] = ["Ignored"] + [f"Classe {i}" for i in range(1, config["NUM_CLASSES"])]
 
-    output_size = config["OUTPUT_SIZE"]
-    paths = {"original": config["DATASET_PATH_TRAIN"], "augmented": config["DATASET_PATH_AUG"], "aggressive": config["DATASET_PATH_AUG_AGGR"]}
-    all_dirs = []
-    tqdm.write("Caricamento percorsi dei dataset..."); 
-    for key, path in paths.items():
-        if not os.path.isdir(path):
-            tqdm.write(f"Attenzione: il percorso '{path}' non esiste, verrà saltato."); continue
-        dirs = [d for d in glob.glob(os.path.join(path, "*")) if os.path.isdir(d)]; tqdm.write(f"Trovati {len(dirs)} campioni in '{key}'."); all_dirs.extend(dirs)
-    if not all_dirs: raise FileNotFoundError("Nessuna directory di dati trovata.")
-    all_dirs = sorted(list(set(all_dirs)))
+    # --- Calcolo di Media e Deviazione Standard ---
+    tqdm.write("Preparazione per il calcolo delle statistiche del dataset...")
+    
+    # 1. Definisci la pipeline di trasformazione *solo* per il calcolo (senza normalizzazione)
+    temp_transforms = A.Compose([
+        A.Resize(height=config["OUTPUT_SIZE"][0], width=config["OUTPUT_SIZE"][1], interpolation=cv2.INTER_NEAREST),
+        ToTensorV2(), # Scala a [0, 1] ma non normalizza
+    ])
+    
+    # 2. Crea un Dataset temporaneo
+    # Nota: usiamo solo il set di training originale per una stima rappresentativa
+    train_original_dirs = glob.glob(os.path.join(config["DATASET_PATH_TRAIN"], "*"))
+    temp_dataset = SegmentationDataset(
+        sample_dirs=train_original_dirs,
+        transform=temp_transforms,
+        config={"NUM_CLASSES": 9, "IGNORE_INDEX": 0} # Config minima per il dataset
+    )
 
-    config["MEAN"], config["STD"] = calculate_mean_std(SegmentationDataset(
-        sample_dirs=glob.glob(os.path.join("./dataset/training/train", "*")),
-        transform=A.Compose([A.Resize(height=output_size[0], width=output_size[1], interpolation=cv2.INTER_NEAREST), ToTensorV2()]),
-        config={"NUM_CLASSES": 9, "IGNORE_INDEX": 0}
-    ))
+    # 3. Crea un DataLoader temporaneo (IL FIX CHIAVE)
+    temp_loader = DataLoader(
+        temp_dataset, 
+        batch_size=config["BATCH_SIZE"] * 2, # Possiamo usare un batch size più grande
+        shuffle=False, 
+        num_workers=config["NUM_WORKERS_TRAIN"]
+    )
+    
+    # 4. Ora passa il DataLoader alla funzione
+    mean, std = calculate_mean_std(temp_loader)
+    
+    config["MEAN"] = mean
+    config["STD"] = std
 
-    tqdm.write(f"Media per canale: {config['MEAN']}, Deviazione Standard per canale: {config['STD']}")
+    tqdm.write(f"Media calcolata: {config['MEAN']}, Deviazione Standard calcolata: {config['STD']}")
     return config
 
 # =============================================================================
