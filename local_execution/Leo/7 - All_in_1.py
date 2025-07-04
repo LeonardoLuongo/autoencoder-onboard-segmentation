@@ -81,39 +81,40 @@ def get_config() -> Dict[str, Any]:
     # FIX: Nomi delle classi anonimi come da richiesta
     config["CLASS_NAMES"] = ["Ignored"] + [f"Classe {i}" for i in range(1, config["NUM_CLASSES"])]
 
-    # --- Calcolo di Media e Deviazione Standard ---
+    # --- CALCOLO CORRETTO DI MEDIA E DEVIAZIONE STANDARD ---
     tqdm.write("Preparazione per il calcolo delle statistiche del dataset...")
     
-    # 1. Definisci la pipeline di trasformazione *solo* per il calcolo (senza normalizzazione)
-    temp_transforms = A.Compose([
-        A.Resize(height=config["OUTPUT_SIZE"][0], width=config["OUTPUT_SIZE"][1], interpolation=cv2.INTER_NEAREST),
-        ToTensorV2(), # Scala a [0, 1] ma non normalizza
+    # 1. Pipeline di trasformazione SENZA A.Normalize
+    stats_transforms = A.Compose([
+        A.Resize(height=config["OUTPUT_SIZE"][0], width=config["OUTPUT_SIZE"][1]),
+        # ToTensorV2 è fondamentale perché scala le immagini da [0, 255] a [0, 1]
+        ToTensorV2(),
     ])
-    
-    # 2. Crea un Dataset temporaneo
-    # Nota: usiamo solo il set di training originale per una stima rappresentativa
-    train_original_dirs = glob.glob(os.path.join(config["DATASET_PATH_TRAIN"], "*"))
-    temp_dataset = SegmentationDataset(
+
+    # 2. Crea un Dataset temporaneo usando solo i dati originali
+    train_original_dirs = [d for d in glob.glob(os.path.join(config["DATASET_PATH_TRAIN"], "*")) if os.path.isdir(d)]
+    stats_dataset = SegmentationDataset(
         sample_dirs=train_original_dirs,
-        transform=temp_transforms,
-        config={"NUM_CLASSES": 9, "IGNORE_INDEX": 0} # Config minima per il dataset
+        transform=stats_transforms,
+        config=config  # Passa la config per l'assert nel dataset
     )
 
-    # 3. Crea un DataLoader temporaneo (IL FIX CHIAVE)
-    temp_loader = DataLoader(
-        temp_dataset, 
-        batch_size=config["BATCH_SIZE"] * 2, # Possiamo usare un batch size più grande
+    # 3. Avvolgi il Dataset in un DataLoader (IL FIX FONDAMENTALE)
+    stats_loader = DataLoader(
+        stats_dataset, 
+        batch_size=config["BATCH_SIZE"] * 2, # Possiamo usare un batch size più grande qui
         shuffle=False, 
         num_workers=config["NUM_WORKERS_TRAIN"]
     )
     
-    # 4. Ora passa il DataLoader alla funzione
-    mean, std = calculate_mean_std(temp_loader)
+    # 4. Ora chiama la funzione con il DataLoader
+    mean, std = calculate_mean_std(stats_loader)
     
+    # 5. Salva i valori calcolati nella configurazione
     config["MEAN"] = mean
     config["STD"] = std
 
-    tqdm.write(f"Media calcolata: {config['MEAN']}, Deviazione Standard calcolata: {config['STD']}")
+    tqdm.write("Statistiche personalizzate calcolate e caricate nella configurazione.")
     return config
 
 # =============================================================================
@@ -123,37 +124,27 @@ def get_config() -> Dict[str, Any]:
 def calculate_mean_std(loader: DataLoader) -> Tuple[np.ndarray, np.ndarray]:
     """
     Calcola la media e la deviazione standard per canale su un intero dataset.
-
-    Args:
-        loader (DataLoader): DataLoader che fornisce le immagini come tensori
-                             in scala [0, 1] e con forma (B, C, H, W).
-                             IMPORTANTE: Il loader non deve applicare la normalizzazione.
-
-    Returns:
-        Tuple[np.ndarray, np.ndarray]: Una tupla contenente (mean, std).
+    È numericamente stabile.
     """
-    tqdm.write("Calcolo di media e deviazione standard in corso. Potrebbe richiedere tempo...")
+    tqdm.write("Calcolo di media e deviazione standard in corso...")
     
     psum = torch.tensor([0.0, 0.0, 0.0])
     psum_sq = torch.tensor([0.0, 0.0, 0.0])
     pixel_count = 0
 
-    # Itera sul dataset
     for images, _ in tqdm(loader, desc="Analisi Statistiche Dataset"):
-        # Le immagini dovrebbero essere (B, 3, H, W) e in scala [0, 1]
         batch_size, num_channels, height, width = images.shape
-        
-        # Somma i valori dei pixel per canale
         psum += images.sum(axis=[0, 2, 3])
-        # Somma i quadrati dei valori dei pixel per canale
         psum_sq += (images ** 2).sum(axis=[0, 2, 3])
-        # Conta il numero totale di pixel
         pixel_count += batch_size * height * width
 
-    # Calcola la media e la deviazione standard finale
     total_mean = psum / pixel_count
     total_var = (psum_sq / pixel_count) - (total_mean ** 2)
-    total_std = torch.sqrt(total_var)
+    
+    # --- FIX PER LA STABILITÀ NUMERICA ---
+    # Assicura che la varianza non sia mai negativa a causa di errori di precisione.
+    # Usiamo un minimo piccolo e positivo per evitare anche sqrt(0).
+    total_std = torch.sqrt(torch.clamp(total_var, min=1e-6))
 
     mean_np = total_mean.numpy()
     std_np = total_std.numpy()
@@ -161,7 +152,6 @@ def calculate_mean_std(loader: DataLoader) -> Tuple[np.ndarray, np.ndarray]:
     tqdm.write("\n--- Statistiche Dataset Calcolate ---")
     tqdm.write(f"Media per canale (R, G, B): {mean_np}")
     tqdm.write(f"Deviazione Standard per canale (R, G, B): {std_np}")
-    tqdm.write("Copia questi valori nella tua pipeline di trasformazione `A.Normalize`.")
     
     return mean_np, std_np
 
@@ -296,8 +286,8 @@ def main():
 
     train_dirs, val_dirs = get_grouped_stratified_split(config)
     # Pipeline di augmentation diverse per training e validazione
-    train_transforms = get_train_transforms(config["OUTPUT_SIZE"], config["MEAN"], config["STD"])
-    val_transforms = get_val_transforms(config["OUTPUT_SIZE"], config["MEAN"], config["STD"])
+    train_transforms = get_train_transforms(config)
+    val_transforms = get_val_transforms(config)
     
     train_dataset = SegmentationDataset(train_dirs, train_transforms, config)
     val_dataset = SegmentationDataset(val_dirs, val_transforms, config)
