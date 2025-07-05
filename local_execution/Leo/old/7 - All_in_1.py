@@ -163,6 +163,7 @@ def get_train_transforms(config: Dict[str, Any]) -> A.Compose:
     """Pipeline di augmentation AGGRESSIVA per risolvere le confusioni specifiche."""
     
     output_size = config["OUTPUT_SIZE"]
+    mean, std = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
     return A.Compose([
         A.Resize(height=output_size[0], width=output_size[1], interpolation=cv2.INTER_NEAREST),
         A.HorizontalFlip(p=0.5),
@@ -174,7 +175,7 @@ def get_train_transforms(config: Dict[str, Any]) -> A.Compose:
         A.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1, p=0.8), 
         # Aggiunto per forzare il modello a usare il contesto
         A.CoarseDropout(max_holes=16, max_height=32, max_width=32, min_holes=8, p=0.5), 
-        A.Normalize(mean=config["MEAN"], std=config["STD"]),
+        A.Normalize(mean=mean, std=std),
         ToTensorV2(),
     ])
 
@@ -258,6 +259,10 @@ def plot_confusion_matrix(conf_matrix_np, class_names, ignore_index, save_path="
 def train_one_epoch(model, loader, optimizer, criterion, scaler, device, use_amp):
     model.train(); running_loss = 0.0; progress_bar = tqdm(loader, desc="Training", leave=False)
     for images, masks in progress_bar:
+        # Applica CutMix con una certa probabilità
+        if torch.rand(1) < 0.5: # es. 50% di probabilità per batch
+            images, masks = cutmix_batch(images, masks, alpha=1.0)
+
         images, masks = images.to(device), masks.to(device, dtype=torch.long)
         with autocast(enabled=use_amp, device_type=device.type if use_amp else 'cpu'):
             outputs = model(images); loss = criterion(outputs, masks)
@@ -280,6 +285,64 @@ def evaluate(model, loader, criterion, device, config) -> Tuple[float, float, np
     mean_iou = np.nanmean(iou_per_class[config["IGNORE_INDEX"]+1:]) if config["IGNORE_INDEX"] is not None else np.nanmean(iou_per_class)
     return total_loss / len(loader), mean_iou, iou_per_class, conf_matrix.cpu().numpy()
 
+
+def cutmix_batch(images, masks, alpha=1.0):
+    """
+    Applica CutMix a un batch di immagini e maschere per la segmentazione.
+
+    Args:
+        images (torch.Tensor): Batch di immagini (B, C, H, W).
+        masks (torch.Tensor): Batch di maschere (B, H, W).
+        alpha (float): Parametro della distribuzione Beta per decidere la dimensione del ritaglio.
+
+    Returns:
+        Tuple[torch.Tensor, torch.Tensor]: Il nuovo batch con CutMix applicato.
+    """
+    batch_size = images.size(0)
+    
+    # Genera gli indici per mescolare il batch
+    # Es. [0, 1, 2, 3] -> [2, 0, 3, 1]
+    indices = torch.randperm(batch_size).to(images.device)
+    
+    # Genera le coordinate del riquadro da tagliare e incollare
+    # lambda decide la dimensione del riquadro
+    lam = np.random.beta(alpha, alpha)
+    
+    # Calcola le coordinate (bounding box)
+    bbx1, bby1, bbx2, bby2 = rand_bbox(images.size(), lam)
+    
+    # Prendi le immagini e maschere "sorgente" (da cui tagliare)
+    images_shuffled = images[indices]
+    masks_shuffled = masks[indices]
+    
+    # Crea una copia delle immagini e maschere originali
+    new_images = images.clone()
+    new_masks = masks.clone()
+    
+    # Incolla il riquadro
+    new_images[:, :, bby1:bby2, bbx1:bbx2] = images_shuffled[:, :, bby1:bby2, bbx1:bbx2]
+    new_masks[:, bby1:bby2, bbx1:bbx2] = masks_shuffled[:, bby1:bby2, bbx1:bbx2]
+
+    return new_images, new_masks
+
+def rand_bbox(size, lam):
+    """Calcola le coordinate di un bounding box casuale."""
+    W = size[2]
+    H = size[3]
+    cut_rat = np.sqrt(1. - lam)
+    cut_w = int(W * cut_rat)
+    cut_h = int(H * cut_rat)
+
+    # Coordinate casuali del centro
+    cx = np.random.randint(W)
+    cy = np.random.randint(H)
+
+    bbx1 = np.clip(cx - cut_w // 2, 0, W)
+    bby1 = np.clip(cy - cut_h // 2, 0, H)
+    bbx2 = np.clip(cx + cut_w // 2, 0, W)
+    bby2 = np.clip(cy + cut_h // 2, 0, H)
+
+    return bbx1, bby1, bbx2, bby2
 # =============================================================================
 # 6. FUNZIONE PRINCIPALE (CON AUGMENTATION AGGRESSIVA)
 # =============================================================================
