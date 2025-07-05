@@ -1,0 +1,15 @@
+# requirements.txt
+torch
+torchvision
+numpy
+opencv-python-headless
+Pillow
+tqdm
+imagehash
+networkx
+scikit-learn
+segmentation-models-pytorch
+albumentations
+matplotlib
+seaborn
+PyYAML

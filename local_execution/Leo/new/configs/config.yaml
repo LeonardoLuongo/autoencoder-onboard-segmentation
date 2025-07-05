@@ -1,0 +1,142 @@
+# configs/base_config.yaml
+
+# ===================================================================
+# 1. IMPOSTAZIONI GENERALI E DI INFRASTRUTTURA
+# ===================================================================
+project_name: "FinalRun_EfficientNetB5_Aggressive"
+base_path: "../../../"                  # Percorso base relativo a questo file di config
+seed: 42
+device: "auto"                   # "auto", "cuda", o "cpu"
+use_amp: true                    # Abilita/disabilita Automatic Mixed Precision
+
+# ===================================================================
+# 2. PERCORSI
+# ===================================================================
+paths:
+  # Usa una lista per includere tutte le fonti di dati offline
+  dataset_sources:
+    - "dataset/training/train"
+    - "dataset/training/augmented"
+    - "dataset/training/augmented_aggressive"
+  
+  model_save: "best_model_final.pth"        # Nome del modello migliore che verrà salvato
+  plot_save: "confusion_matrix_final.png"     # Nome della matrice di confusione
+
+# ===================================================================
+# 3. IMPOSTAZIONI DEL DATASET E DEL DATALOADER
+# ===================================================================
+data:
+  output_size: [384, 768]        # [altezza, larghezza]
+  num_classes: 9
+  ignore_index: 0
+  class_names: ["Ignored", "Classe 1", "Classe 2", "Classe 3", "Classe 4", "Classe 5", "Classe 6", "Classe 7", "Classe 8"]
+  
+  # Inserisci qui i valori che hai calcolato per il tuo dataset
+  # Se li lasci su "auto", lo script li ricalcolerà (usando solo la prima fonte di dati)
+  stats:
+    mean: [0.4294, 0.4482, 0.4245]
+    std: [0.2645, 0.2636, 0.2659]
+
+  split:
+    validation_fraction: 0.2
+    # Classi rare su cui stratificare lo split
+    stratify_on_rare_classes: [2, 4, 5, 6, 8]
+    hash_similarity_threshold: 5
+
+  loader:
+    batch_size: 4 # Un valore conservativo per un modello pesante e un'alta risoluzione
+    num_workers_train: 0 # Imposta a 0 per la stabilità su Windows
+    num_workers_val: 0
+
+# ===================================================================
+# 4. IMPOSTAZIONI DEL MODELLO
+# ===================================================================
+model:
+  architecture: "Unet"           # Modello da segmentation_models_pytorch
+  encoder: "efficientnet-b5"     # Un encoder potente
+  encoder_weights: "imagenet"    # Abilita il Transfer Learning
+
+# ===================================================================
+# 5. IMPOSTAZIONI DEL TRAINING
+# ===================================================================
+loss:
+  name: "TverskyLoss"            # Loss robusta per lo sbilanciamento
+  params:
+    mode: "multiclass"
+    alpha: 0.7                   # Penalizza di più i falsi negativi (classi mancate)
+    beta: 0.3
+    from_logits: true
+    ignore_index: 0              # Assicurati che anche la loss ignori il background
+
+training_phases:
+  - name: "Fase 1: Freeze Encoder & Train Decoder"
+    epochs: 7
+    freeze_encoder: true
+    optimizer:
+      name: "AdamW"
+      params:
+        lr: 0.001
+        weight_decay: 0.00001
+    scheduler:
+      name: "ReduceLROnPlateau"
+      params:
+        mode: "max"
+        factor: 0.5
+        patience: 2
+
+  - name: "Fase 2: Unfreeze All & Fine-tuning"
+    epochs: 23
+    freeze_encoder: false
+    optimizer:
+      name: "AdamW"
+      params:
+        lr: 0.00005 # Learning rate molto basso per il fine-tuning
+        weight_decay: 0.0001 # Aumenta la regolarizzazione
+    scheduler:
+      name: "ReduceLROnPlateau"
+      params:
+        mode: "max"
+        factor: 0.2
+        patience: 3
+        cooldown: 1
+        min_lr: 0.0000001
+
+# ===================================================================
+# 6. PIPELINE DI AUGMENTATION (ONLINE)
+# ===================================================================
+augmentations:
+  # Pipeline per il training set, molto aggressiva per combattere l'overfitting
+  train:
+    - name: "HorizontalFlip"
+      params: { p: 0.5 }
+    - name: "VerticalFlip"
+      params: { p: 0.5 }
+    - name: "ShiftScaleRotate"
+      params:
+        shift_limit: 0.1
+        scale_limit: 0.15
+        rotate_limit: 25
+        p: 0.7
+        interpolation: 1 # cv2.INTER_LINEAR
+        border_mode: 0   # cv2.BORDER_CONSTANT
+    - name: "ColorJitter"
+      params:
+        brightness: 0.4
+        contrast: 0.4
+        saturation: 0.4
+        hue: 0.1
+        p: 0.8
+    - name: "GaussNoise"
+      params: { p: 0.3 }
+    - name: "CoarseDropout"
+      params:
+        max_holes: 16
+        max_height: 32
+        max_width: 32
+        min_holes: 8
+        fill_value: 0
+        mask_fill_value: 0 # Importante: non cancellare le etichette dalla maschera
+        p: 0.5
+  
+  # La pipeline di validazione non ha augmentation, solo preprocessing
+  validation: []
