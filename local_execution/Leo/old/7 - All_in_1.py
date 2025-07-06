@@ -81,7 +81,7 @@ def get_config() -> Dict[str, Any]:
 
         "CONTRASTIVE_TEMP": 0.1,      # τ dell’InfoNCE
         "CONTRASTIVE_MAX_SAMPLES": 4096,  # pixel da campionare per batch
-        "CONTRASTIVE_W": 0.5,         # peso della loss rispetto alle loss di segmento
+        "CONTRASTIVE_W": 0.2,         # peso della loss rispetto alle loss di segmento
     }
     
     # FIX: Nomi delle classi anonimi come da richiesta
@@ -308,7 +308,11 @@ def train_one_epoch(model, loader, optimizer, seg_loss_fn, contrast_loss_fn, seg
 
         images, masks = images.to(device), masks.to(device, dtype=torch.long)
         with autocast(enabled=use_amp, device_type=device.type if use_amp else 'cpu'):
-            outputs = model(images); loss = seg_loss_fn(outputs, masks) + contrast_loss_fn(outputs, masks) * seg_w
+            outputs = model(images); 
+            if contrast_loss_fn is not None:
+                loss = seg_loss_fn(outputs, masks) + contrast_loss_fn(outputs, masks) * seg_w
+            else:
+                loss = seg_loss_fn(outputs, masks)
         optimizer.zero_grad(); scaler.scale(loss).backward(); scaler.step(optimizer); scaler.update()
         running_loss += loss.item(); progress_bar.set_postfix(loss=f"{loss.item():.4f}")
     return running_loss / len(loader)
@@ -446,6 +450,41 @@ class PixelContrastiveLoss(nn.Module):
         loss = -(torch.log((pos_sum + 1e-8) / (all_sum + 1e-8))).mean()
         return loss
 
+# =============================================================================
+# FocalTverskyLoss
+# =============================================================================
+
+class FocalTverskyLoss(nn.Module):
+    def __init__(self, alpha=0.8, beta=0.2, gamma=2.0,
+                 class_weights=None, ignore_index=0):
+        super().__init__()
+        self.alpha, self.beta, self.gamma = alpha, beta, gamma
+        self.cw = class_weights  # tensor (C,) normalizzato
+        self.ignore = ignore_index
+
+    def forward(self, logits, targets):
+        probs = torch.softmax(logits, dim=1)
+        true  = torch.nn.functional.one_hot(
+                    targets, num_classes=logits.size(1)
+                ).permute(0,3,1,2).float()
+
+        if self.ignore is not None:
+            mask = targets != self.ignore
+            probs, true = probs*mask[:,None], true*mask[:,None]
+
+        dims = (0,2,3)
+        TP = (probs*true).sum(dims)
+        FP = (probs*(1-true)).sum(dims)
+        FN = ((1-probs)*true).sum(dims)
+
+        TI = (TP+1e-7) / (TP + self.alpha*FN + self.beta*FP + 1e-7)
+        loss = (1 - TI).pow(self.gamma)  # focalizzazione
+
+        if self.cw is not None:
+            loss = loss * self.cw
+
+        return loss.mean()
+
 
 # =============================================================================
 # 6. FUNZIONE PRINCIPALE (CON AUGMENTATION AGGRESSIVA)
@@ -475,15 +514,29 @@ def main():
     criterion_tversky = TverskyLoss(mode='multiclass', alpha=0.7, beta=0.3).to(device)
     criterion_ce = nn.CrossEntropyLoss(weight=class_weights, ignore_index=config["IGNORE_INDEX"])
     criterion_focal = FocalLoss(mode='multiclass', gamma=2.0).to(device)
-    # New
+    # 
     pixel_contrast = PixelContrastiveLoss(
         temperature=config["CONTRASTIVE_TEMP"],
         max_samples=config["CONTRASTIVE_MAX_SAMPLES"],
         ignore_index=config["IGNORE_INDEX"]
     ).to(device)
 
+    criterion_ft  = FocalTverskyLoss(
+                    alpha=0.8, beta=0.2, gamma=2.0,
+                    class_weights=class_weights,
+                    ignore_index=config["IGNORE_INDEX"]
+                ).to(device)
+
+    criterion_wce = nn.CrossEntropyLoss(
+                        weight=class_weights,
+                        ignore_index=config["IGNORE_INDEX"]
+                    ).to(device)
+
     def combined_loss(pred, target):
-        return 0.2 * criterion_tversky(pred, target) + 0.6 * criterion_ce(pred, target) + 0.2 * criterion_focal(pred, target)
+        # warm-up CE per i primi 3 epoch
+        w_wce = 0.2
+        return 0.8 * criterion_ft(pred, target) + \
+           w_wce * criterion_wce(pred, target)
 
     best_iou = -1.0; best_conf_matrix = None; global_epoch = 0
 
