@@ -166,7 +166,7 @@ def get_train_transforms(config: Dict[str, Any]) -> A.Compose:
     output_size = config["OUTPUT_SIZE"]
     mean, std = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
     return A.Compose([
-        A.Resize(*output_size),
+        A.Resize(height=config["OUTPUT_SIZE"][0], width=config["OUTPUT_SIZE"][1]),
         A.HorizontalFlip(p=0.5),
         A.VerticalFlip(p=0.5),
         A.RandomRotate90(p=0.7),
@@ -419,78 +419,3 @@ def main():
 if __name__ == "__main__":
     main()
 
-
-'''
-
-PS D:\MLPoject-Git\autoencoder-onboard-segmentation> & "C:/Program Files/Python312/python.exe" "d:/MLPoject-Git/autoencoder-onboard-segmentation/local_execution/Leo/old/7 - All_in_1.py"
-Preparazione per il calcolo delle statistiche del dataset...
-Calcolo di media e deviazione standard in corso...
-Analisi Statistiche Dataset: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████| 117/117 [00:27<00:00,  4.31it/s]
-
---- Statistiche Dataset Calcolate ---
-Media per canale (R, G, B): [0.429485   0.44826734 0.42454103]
-Deviazione Standard per canale (R, G, B): [0.26456702 0.26363945 0.2659536 ]
-Statistiche personalizzate calcolate e caricate nella configurazione.
-Device: cuda | Mixed Precision: True
-Strategia Finale: efficientnet-b5 con Augmentation Mirata
-Caricamento percorsi dei dataset...
-Trovati 931 campioni in 'original'.
-Trovati 561 campioni in 'augmented'.
-Trovati 1960 campioni in 'aggressive'.
-Calcolo Hash: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 3452/3452 [00:28<00:00, 122.66it/s] 
-Creazione dei bucket per l'ottimizzazione del confronto...
-Confronto delle immagini all'interno dei bucket (ottimizzato)...
-Analisi Bucket: 100%|███████████████████████████████████████████████████████████████████████████████████████████████████████████████████████████| 86/86 [00:00<00:00, 183.84it/s] 
-Trovati 2524 gruppi di immagini uniche.
-Etichettatura gruppi per lo split: 100%|█████████████████████████████████████████████████████████████████████████████████████████████████████| 2524/2524 [00:31<00:00, 81.01it/s] 
-Split stratificato creato: 2746 train, 706 validation.
-d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\Leo\old\7 - All_in_1.py:177: UserWarning: Argument(s) 'max_holes, max_height, max_width' are not valid for transform CoarseDropout
-  A.CoarseDropout(max_holes=16, max_height=32, max_width=32, p=0.5),
-Creazione del modello: U-Net con encoder 'efficientnet-b5'
-Parametri addestrabili: 31,217,161
-
---- INIZIO FASE 1: TRAINING DEL DECODER (ENCODER CONGELATO) ---
-
---- Fase 1 / Epoch 1/7 (Global: 1) ---
-Traceback (most recent call last):                                                                                                                                                
-  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\Leo\old\7 - All_in_1.py", line 420, in <module>
-    main()
-  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\Leo\old\7 - All_in_1.py", line 384, in main
-    train_loss = train_one_epoch(model, train_loader, optimizer, combined_loss, scaler, device, use_amp)
-                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\Leo\old\7 - All_in_1.py", line 261, in train_one_epoch
-    for images, masks in progress_bar:
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\tqdm\std.py", line 1181, in __iter__
-    for obj in iterable:
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\dataloader.py", line 733, in __next__
-    data = self._next_data()
-           ^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\dataloader.py", line 1515, in _next_data
-    return self._process_data(data, worker_id)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\dataloader.py", line 1550, in _process_data
-    data.reraise()
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\_utils.py", line 750, in reraise
-    raise exception
-RuntimeError: Caught RuntimeError in DataLoader worker process 0.
-Original Traceback (most recent call last):
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\_utils\worker.py", line 349, in _worker_loop
-    data = fetcher.fetch(index)  # type: ignore[possibly-undefined]
-           ^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\_utils\fetch.py", line 55, in fetch
-    return self.collate_fn(data)
-           ^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\_utils\collate.py", line 398, in default_collate
-    return collate(batch, collate_fn_map=default_collate_fn_map)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\_utils\collate.py", line 212, in collate
-    collate(samples, collate_fn_map=collate_fn_map)
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\_utils\collate.py", line 155, in collate
-    return collate_fn_map[elem_type](batch, collate_fn_map=collate_fn_map)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\_utils\collate.py", line 272, in collate_tensor_fn
-    return torch.stack(batch, 0, out=out)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-RuntimeError: stack expects each tensor to be equal size, but got [3, 768, 384] at entry 0 and [3, 384, 768] at entry 1
-
-'''
