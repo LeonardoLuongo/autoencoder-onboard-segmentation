@@ -71,12 +71,12 @@ def get_config() -> Dict[str, Any]:
         "DATASET_PATH_AUG_AGGR": os.path.join(base_path, "dataset/training/augmented_aggressive"),
         "MODEL_SAVE_PATH": os.path.join(base_path, "best_model_b5_aggressive_aug.pth"),
 
-        "ENCODER": "efficientnet-b5", "ENCODER_WEIGHTS": "imagenet",
+        "ENCODER": "efficientnet-b2", "ENCODER_WEIGHTS": "imagenet",
         "OUTPUT_SIZE": (384, 768), "BATCH_SIZE": 4, 
         "NUM_CLASSES": 9, "IGNORE_INDEX": 0, "VALIDATION_SPLIT": 0.2,
 
         "FREEZE_EPOCHS": 7, "UNFREEZE_EPOCHS": 23,
-        "LR_HEAD": 1e-3, "LR_FULL": 1e-5, "WEIGHT_DECAY": 1e-4,
+        "LR_HEAD": 1e-3, "LR_FULL": 1e-5, "WEIGHT_DECAY": 1e-6,
     }
     
     # FIX: Nomi delle classi anonimi come da richiesta
@@ -166,7 +166,6 @@ def get_train_transforms(config: Dict[str, Any]) -> A.Compose:
     output_size = config["OUTPUT_SIZE"]
     mean, std = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
     return A.Compose([
-        A.Resize(height=config["OUTPUT_SIZE"][0], width=config["OUTPUT_SIZE"][1]),
         A.HorizontalFlip(p=0.5),
         A.VerticalFlip(p=0.5),
         A.RandomRotate90(p=0.7),
@@ -174,7 +173,16 @@ def get_train_transforms(config: Dict[str, Any]) -> A.Compose:
         A.RandomGamma(p=0.7),
         A.ColorJitter(p=0.7),
         A.GaussianBlur(blur_limit=(3, 5), p=0.4),
-        A.CoarseDropout(max_holes=16, max_height=32, max_width=32, p=0.5),
+        A.CoarseDropout(
+            max_holes=16, 
+            min_holes=8,
+            max_height=32,
+            min_height=16,
+            max_width=32, 
+            min_width=16,
+            p=0.5
+        ),
+        A.Resize(height=config["OUTPUT_SIZE"][0], width=config["OUTPUT_SIZE"][1]),
         A.Normalize(mean=mean, std=std),
         ToTensorV2(),
     ])
@@ -238,7 +246,7 @@ def get_grouped_stratified_split(config: Dict[str, Any]) -> Tuple[List[str], Lis
 # 5. MODELLO E FUNZIONI DI TRAINING/VALIDAZIONE (Logica invariata)
 # =============================================================================
 def get_model(config: Dict[str, Any]) -> nn.Module:
-    model = smp.Unet(encoder_name=config["ENCODER"], encoder_weights=config["ENCODER_WEIGHTS"], in_channels=3, classes=config["NUM_CLASSES"])
+    model = smp.UnetPlusPlus(encoder_name=config["ENCODER"], encoder_weights=config["ENCODER_WEIGHTS"], in_channels=3, classes=config["NUM_CLASSES"])
     tqdm.write(f"Creazione del modello: U-Net con encoder '{config['ENCODER']}'"); tqdm.write(f"Parametri addestrabili: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}"); return model
 
 def plot_confusion_matrix(conf_matrix_np, class_names, ignore_index, save_path="confusion_matrix_best.png"):
@@ -418,4 +426,3 @@ def main():
 # =============================================================================
 if __name__ == "__main__":
     main()
-
