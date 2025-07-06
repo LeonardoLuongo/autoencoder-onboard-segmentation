@@ -65,7 +65,7 @@ def get_config() -> Dict[str, Any]:
     config = {
         "DEVICE": torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
         "RANDOM_SEED": 42, "NUM_WORKERS_TRAIN": 2, "NUM_WORKERS_VAL": 2, "USE_AMP": True,
-        "PERSISTENT_WORKERS": True, "RARE_CLASS_INDICES": [2, 4, 5, 6], "RARE_BOOST_FACTOR": 7.0,
+        "PERSISTENT_WORKERS": True, "RARE_CLASS_INDICES": [4], "RARE_BOOST_FACTOR": 20.0,
         
         "DATASET_PATH_TRAIN": os.path.join(base_path, "dataset/training/train"),
         "DATASET_PATH_AUG": os.path.join(base_path, "dataset/training/augmented"),
@@ -264,11 +264,11 @@ def calculate_class_weights(dataset: Dataset, config: Dict[str, Any]) -> torch.T
     # Calcolo dei pesi con Inverse Frequency + Boost per le classi rare
     class_frequencies = pixel_counts / pixel_counts.sum()
     weights = 1.0 / (class_frequencies + 1e-6)
+    weights = weights / weights.mean() # Normalizza i pesi
     
     for idx in config["RARE_CLASS_INDICES"]:
         weights[idx] *= config["RARE_BOOST_FACTOR"]
         
-    weights = weights / weights.mean() # Normalizza i pesi
     weights_tensor = torch.tensor(weights, dtype=torch.float).to(config["DEVICE"])
     
     print("\nPesi calcolati per la loss (con boost per classi rare):")
@@ -522,7 +522,7 @@ def main():
     ).to(device)
 
     criterion_ft  = FocalTverskyLoss(
-                    alpha=0.8, beta=0.2, gamma=2.0,
+                    alpha=0.9, beta=0.1, gamma=3.0,
                     class_weights=class_weights,
                     ignore_index=config["IGNORE_INDEX"]
                 ).to(device)
@@ -533,10 +533,7 @@ def main():
                     ).to(device)
 
     def combined_loss(pred, target):
-        # warm-up CE per i primi 3 epoch
-        w_wce = 0.2
-        return 0.8 * criterion_ft(pred, target) + \
-           w_wce * criterion_wce(pred, target)
+        return criterion_ft(pred, target)
 
     best_iou = -1.0; best_conf_matrix = None; global_epoch = 0
 
@@ -562,12 +559,13 @@ def main():
     # for param in model.encoder.parameters(): param.requires_grad = True
     optimizer = optim.AdamW(model.parameters(), lr=config["LR_FULL"]) #, weight_decay=config["WEIGHT_DECAY"])
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5, cooldown=1, min_lr=1e-7)
-    
+
     for epoch in range(config["UNFREEZE_EPOCHS"]):
         global_epoch += 1; tqdm.write(f"\n--- Fase 2 / Epoch {epoch+1}/{config['UNFREEZE_EPOCHS']} (Global: {global_epoch}) ---")
+        
         train_loss = train_one_epoch(
             model=model, loader=train_loader, optimizer=optimizer, 
-            seg_loss_fn=combined_loss, contrast_loss_fn=pixel_contrast, seg_w=config["CONTRASTIVE_W"], 
+            seg_loss_fn=combined_loss, contrast_loss_fn=None, seg_w=config["CONTRASTIVE_W"], 
             scaler=scaler, device=device, use_amp=use_amp
         )
         val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config)
