@@ -65,18 +65,23 @@ def get_config() -> Dict[str, Any]:
     config = {
         "DEVICE": torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
         "RANDOM_SEED": 42, "NUM_WORKERS_TRAIN": 2, "NUM_WORKERS_VAL": 2, "USE_AMP": True,
+        "PERSISTENT_WORKERS": True, "RARE_CLASS_INDICES": [2, 4, 5, 6], "RARE_BOOST_FACTOR": 7.0,
         
         "DATASET_PATH_TRAIN": os.path.join(base_path, "dataset/training/train"),
         "DATASET_PATH_AUG": os.path.join(base_path, "dataset/training/augmented"),
         "DATASET_PATH_AUG_AGGR": os.path.join(base_path, "dataset/training/augmented_aggressive"),
         "MODEL_SAVE_PATH": os.path.join(base_path, "best_model_b5_aggressive_aug.pth"),
 
-        "ENCODER": "efficientnet-b2", "ENCODER_WEIGHTS": "imagenet",
+        "ENCODER": "efficientnet-b4", "ENCODER_WEIGHTS": "imagenet",
         "OUTPUT_SIZE": (384, 768), "BATCH_SIZE": 4, 
         "NUM_CLASSES": 9, "IGNORE_INDEX": 0, "VALIDATION_SPLIT": 0.2,
 
         "FREEZE_EPOCHS": 7, "UNFREEZE_EPOCHS": 23,
         "LR_HEAD": 1e-3, "LR_FULL": 1e-5, "WEIGHT_DECAY": 1e-6,
+
+        "CONTRASTIVE_TEMP": 0.1,      # τ dell’InfoNCE
+        "CONTRASTIVE_MAX_SAMPLES": 4096,  # pixel da campionare per batch
+        "CONTRASTIVE_W": 0.5,         # peso della loss rispetto alle loss di segmento
     }
     
     # FIX: Nomi delle classi anonimi come da richiesta
@@ -106,7 +111,8 @@ def get_config() -> Dict[str, Any]:
         stats_dataset, 
         batch_size=config["BATCH_SIZE"] * 2, # Possiamo usare un batch size più grande qui
         shuffle=False, 
-        num_workers=config["NUM_WORKERS_TRAIN"]
+        num_workers=config["NUM_WORKERS_TRAIN"],
+        persistent_workers=config["PERSISTENT_WORKERS"]
     )
     
     # 4. Ora chiama la funzione con il DataLoader
@@ -167,13 +173,13 @@ def get_train_transforms(config: Dict[str, Any]) -> A.Compose:
     # mean, std = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225] # image net
     mean, std = config["MEAN"], config["STD"]
     return A.Compose([
-        A.HorizontalFlip(p=0.5),
-        A.VerticalFlip(p=0.5),
-        A.RandomRotate90(p=0.7),
-        A.RandomBrightnessContrast(p=0.7),
-        A.RandomGamma(p=0.7),
-        A.ColorJitter(p=0.7),
-        A.GaussianBlur(blur_limit=(3, 5), p=0.4),
+        # A.HorizontalFlip(p=0.5),
+        # A.VerticalFlip(p=0.5),
+        # A.RandomRotate90(p=0.7),
+        # A.RandomBrightnessContrast(p=0.7),
+        # A.RandomGamma(p=0.7),
+        # A.ColorJitter(p=0.7),
+        # A.GaussianBlur(blur_limit=(3, 5), p=0.4),
         # A.CoarseDropout(
         #     max_holes=16, 
         #     min_holes=8,
@@ -212,7 +218,8 @@ class SegmentationDataset(Dataset):
 
 def get_grouped_stratified_split(config: Dict[str, Any]) -> Tuple[List[str], List[str]]:
     # ... (Codice invariato, già ottimizzato e corretto) ...
-    paths = {"original": config["DATASET_PATH_TRAIN"], "augmented": config["DATASET_PATH_AUG"], "aggressive": config["DATASET_PATH_AUG_AGGR"]}
+    # paths = {"original": config["DATASET_PATH_TRAIN"], "augmented": config["DATASET_PATH_AUG"], "aggressive": config["DATASET_PATH_AUG_AGGR"]}
+    paths = {"original": config["DATASET_PATH_TRAIN"], "augmented": config["DATASET_PATH_AUG"]}
     all_dirs = []
     tqdm.write("Caricamento percorsi dei dataset..."); 
     for key, path in paths.items():
@@ -243,11 +250,38 @@ def get_grouped_stratified_split(config: Dict[str, Any]) -> Tuple[List[str], Lis
     train_dirs, val_dirs = [p for group in train_groups for p in group], [p for group in val_groups for p in group]
     tqdm.write(f"Split stratificato creato: {len(train_dirs)} train, {len(val_dirs)} validation."); return train_dirs, val_dirs
 
+def calculate_class_weights(dataset: Dataset, config: Dict[str, Any]) -> torch.Tensor:
+    """Calcola i pesi per la loss basandosi sulla frequenza delle classi."""
+    print("Calcolo della distribuzione delle classi per i pesi della loss...")
+    num_classes = config["NUM_CLASSES"]
+    pixel_counts = np.zeros(num_classes, dtype=np.int64)
+    
+    loader = DataLoader(dataset, batch_size=config["BATCH_SIZE"], num_workers=config["NUM_WORKERS_TRAIN"])
+    for _, masks in tqdm(loader, desc="Analisi distribuzione pixel"):
+        for mask in masks:
+            pixel_counts += np.bincount(mask.flatten(), minlength=num_classes)
+            
+    # Calcolo dei pesi con Inverse Frequency + Boost per le classi rare
+    class_frequencies = pixel_counts / pixel_counts.sum()
+    weights = 1.0 / (class_frequencies + 1e-6)
+    
+    for idx in config["RARE_CLASS_INDICES"]:
+        weights[idx] *= config["RARE_BOOST_FACTOR"]
+        
+    weights = weights / weights.mean() # Normalizza i pesi
+    weights_tensor = torch.tensor(weights, dtype=torch.float).to(config["DEVICE"])
+    
+    print("\nPesi calcolati per la loss (con boost per classi rare):")
+    for i, w in enumerate(weights_tensor):
+        print(f"  - Classe {i}: {w.item():.2f}")
+    return weights_tensor
+
+
 # =============================================================================
 # 5. MODELLO E FUNZIONI DI TRAINING/VALIDAZIONE (Logica invariata)
 # =============================================================================
 def get_model(config: Dict[str, Any]) -> nn.Module:
-    model = smp.UnetPlusPlus(encoder_name=config["ENCODER"], encoder_weights=config["ENCODER_WEIGHTS"], in_channels=3, classes=config["NUM_CLASSES"])
+    model = smp.Unet(encoder_name=config["ENCODER"], encoder_weights=config["ENCODER_WEIGHTS"], in_channels=3, classes=config["NUM_CLASSES"])
     tqdm.write(f"Creazione del modello: U-Net con encoder '{config['ENCODER']}'"); tqdm.write(f"Parametri addestrabili: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}"); return model
 
 def plot_confusion_matrix(conf_matrix_np, class_names, ignore_index, save_path="confusion_matrix_best.png"):
@@ -265,7 +299,7 @@ def plot_confusion_matrix(conf_matrix_np, class_names, ignore_index, save_path="
     plt.savefig(save_path, dpi=300, bbox_inches='tight'); plt.close(fig)
     tqdm.write(f"Matrice di confusione salvata in '{save_path}'")
 
-def train_one_epoch(model, loader, optimizer, criterion, scaler, device, use_amp):
+def train_one_epoch(model, loader, optimizer, seg_loss_fn, contrast_loss_fn, seg_w, scaler, device, use_amp):
     model.train(); running_loss = 0.0; progress_bar = tqdm(loader, desc="Training", leave=False)
     for images, masks in progress_bar:
         # Applica CutMix con una certa probabilità
@@ -274,7 +308,7 @@ def train_one_epoch(model, loader, optimizer, criterion, scaler, device, use_amp
 
         images, masks = images.to(device), masks.to(device, dtype=torch.long)
         with autocast(enabled=use_amp, device_type=device.type if use_amp else 'cpu'):
-            outputs = model(images); loss = criterion(outputs, masks)
+            outputs = model(images); loss = seg_loss_fn(outputs, masks) + contrast_loss_fn(outputs, masks) * seg_w
         optimizer.zero_grad(); scaler.scale(loss).backward(); scaler.step(optimizer); scaler.update()
         running_loss += loss.item(); progress_bar.set_postfix(loss=f"{loss.item():.4f}")
     return running_loss / len(loader)
@@ -352,6 +386,67 @@ def rand_bbox(size, lam):
     bby2 = np.clip(cy + cut_h // 2, 0, H)
 
     return bbx1, bby1, bbx2, bby2
+
+# =============================================================================
+# 6. PixelContrastiveLoss
+# =============================================================================
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class PixelContrastiveLoss(nn.Module):
+    """
+    Supervised Pixel-wise InfoNCE.
+    * Usa tutti i pixel di un batch fino a `max_samples`
+    * Ignora i pixel con label == ignore_index
+    """
+    def __init__(self,
+                 temperature: float = 0.1,
+                 max_samples: int = 4096,
+                 ignore_index: int = 0):
+        super().__init__()
+        self.temp = temperature
+        self.max_samples = max_samples
+        self.ignore_index = ignore_index
+
+    def forward(self,
+                feats: torch.Tensor,   # (B,C,H,W) – logit o feature
+                labels: torch.Tensor   # (B,H,W)   – int64
+                ) -> torch.Tensor:
+
+        B, C, H, W = feats.shape
+        feats = feats.permute(0, 2, 3, 1).reshape(-1, C)      # (N,C)
+        labels = labels.view(-1)                              # (N,)
+
+        valid = labels != self.ignore_index
+        feats, labels = feats[valid], labels[valid]
+
+        # Campionamento per tenere sotto controllo la memoria GPU
+        if self.max_samples is not None and feats.size(0) > self.max_samples:
+            idx = torch.randperm(feats.size(0), device=feats.device)[:self.max_samples]
+            feats, labels = feats[idx], labels[idx]
+
+        feats = F.normalize(feats, dim=1)                     # unit-sphere
+        logits = torch.mm(feats, feats.t()) / self.temp       # (N,N)
+
+        # Mask per self-pair e per classe
+        N = logits.size(0)
+        self_mask = torch.eye(N, dtype=torch.bool, device=feats.device)
+        class_mask = labels.unsqueeze(0) == labels.unsqueeze(1)   # (N,N)
+
+        # Pos: stessa classe & non self-pair
+        pos_mask = class_mask & (~self_mask)
+        neg_mask = ~class_mask
+
+        exp_logits = torch.exp(logits)
+        pos_sum = (exp_logits * pos_mask).sum(1)              # (N,)
+        all_sum = (exp_logits * (pos_mask | neg_mask)).sum(1)
+
+        # InfoNCE: –log(∑_pos / ∑_all)
+        loss = -(torch.log((pos_sum + 1e-8) / (all_sum + 1e-8))).mean()
+        return loss
+
+
 # =============================================================================
 # 6. FUNZIONE PRINCIPALE (CON AUGMENTATION AGGRESSIVA)
 # =============================================================================
@@ -369,45 +464,59 @@ def main():
     val_dataset = SegmentationDataset(val_dirs, val_transforms, config)
     
     pin_mem = device.type == 'cuda'
-    train_loader = DataLoader(train_dataset, batch_size=config["BATCH_SIZE"], shuffle=True, num_workers=config["NUM_WORKERS_TRAIN"], pin_memory=pin_mem)
-    val_loader = DataLoader(val_dataset, batch_size=config["BATCH_SIZE"], shuffle=False, num_workers=config["NUM_WORKERS_VAL"], pin_memory=pin_mem)
+    train_loader = DataLoader(train_dataset, batch_size=config["BATCH_SIZE"], shuffle=True, num_workers=config["NUM_WORKERS_TRAIN"], pin_memory=pin_mem, persistent_workers=config["PERSISTENT_WORKERS"])
+    val_loader = DataLoader(val_dataset, batch_size=config["BATCH_SIZE"], shuffle=False, num_workers=config["NUM_WORKERS_VAL"], pin_memory=pin_mem, persistent_workers=config["PERSISTENT_WORKERS"])
 
     model = get_model(config).to(device)
     scaler = GradScaler(enabled=use_amp)
+    # Calcola i pesi per la loss sul training set (la funzione va definita sopra)
+    class_weights = calculate_class_weights(train_dataset, config)
+
     criterion_tversky = TverskyLoss(mode='multiclass', alpha=0.7, beta=0.3).to(device)
+    criterion_ce = nn.CrossEntropyLoss(weight=class_weights, ignore_index=config["IGNORE_INDEX"])
     criterion_focal = FocalLoss(mode='multiclass', gamma=2.0).to(device)
+    # New
+    pixel_contrast = PixelContrastiveLoss(
+        temperature=config["CONTRASTIVE_TEMP"],
+        max_samples=config["CONTRASTIVE_MAX_SAMPLES"],
+        ignore_index=config["IGNORE_INDEX"]
+    ).to(device)
 
     def combined_loss(pred, target):
-        return 0.5 * criterion_tversky(pred, target) + 0.5 * criterion_focal(pred, target)
+        return 0.2 * criterion_tversky(pred, target) + 0.6 * criterion_ce(pred, target) + 0.2 * criterion_focal(pred, target)
 
     best_iou = -1.0; best_conf_matrix = None; global_epoch = 0
 
     # --- FASE 1: FREEZE ENCODER, TRAIN DECODER ---
-    tqdm.write("\n--- INIZIO FASE 1: TRAINING DEL DECODER (ENCODER CONGELATO) ---")
-    for param in model.encoder.parameters(): param.requires_grad = False
-    optimizer = optim.AdamW(list(model.decoder.parameters()) + list(model.segmentation_head.parameters()), lr=config["LR_HEAD"], weight_decay=config["WEIGHT_DECAY"])
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=2, factor=0.5)
+    # tqdm.write("\n--- INIZIO FASE 1: TRAINING DEL DECODER (ENCODER CONGELATO) ---")
+    # for param in model.encoder.parameters(): param.requires_grad = False
+    # optimizer = optim.AdamW(list(model.decoder.parameters()) + list(model.segmentation_head.parameters()), lr=config["LR_HEAD"], weight_decay=config["WEIGHT_DECAY"])
+    # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=2, factor=0.5)
 
-    for epoch in range(config["FREEZE_EPOCHS"]):
-        global_epoch += 1; tqdm.write(f"\n--- Fase 1 / Epoch {epoch+1}/{config['FREEZE_EPOCHS']} (Global: {global_epoch}) ---")
-        train_loss = train_one_epoch(model, train_loader, optimizer, combined_loss, scaler, device, use_amp)
-        val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config)
-        scheduler.step(val_miou)
-        tqdm.write(f"Risultati Epoch {global_epoch}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f}")
-        if val_miou > best_iou:
-            best_iou, best_conf_matrix = val_miou, val_conf_matrix
-            torch.save({'model_state_dict': model.state_dict(), 'config': config}, config["MODEL_SAVE_PATH"])
-            tqdm.write(f"\n>>> 🎉 Nuovo modello migliore salvato! mIoU: {best_iou:.4f} <<<")
+    # for epoch in range(config["FREEZE_EPOCHS"]):
+    #     global_epoch += 1; tqdm.write(f"\n--- Fase 1 / Epoch {epoch+1}/{config['FREEZE_EPOCHS']} (Global: {global_epoch}) ---")
+    #     train_loss = train_one_epoch(model, train_loader, optimizer, combined_loss, scaler, device, use_amp)
+    #     val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config)
+    #     scheduler.step(val_miou)
+    #     tqdm.write(f"Risultati Epoch {global_epoch}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f}")
+    #     if val_miou > best_iou:
+    #         best_iou, best_conf_matrix = val_miou, val_conf_matrix
+    #         torch.save({'model_state_dict': model.state_dict(), 'config': config}, config["MODEL_SAVE_PATH"])
+    #         tqdm.write(f"\n>>> 🎉 Nuovo modello migliore salvato! mIoU: {best_iou:.4f} <<<")
 
-    # --- FASE 2: UNFREEZE ALL, FINE-TUNE ---
+    # # --- FASE 2: UNFREEZE ALL, FINE-TUNE ---
     tqdm.write("\n--- INIZIO FASE 2: FINE-TUNING DELL'INTERA RETE (ENCODER SCONGELATO) ---")
-    for param in model.encoder.parameters(): param.requires_grad = True
-    optimizer = optim.AdamW(model.parameters(), lr=config["LR_FULL"], weight_decay=config["WEIGHT_DECAY"])
+    # for param in model.encoder.parameters(): param.requires_grad = True
+    optimizer = optim.AdamW(model.parameters(), lr=config["LR_FULL"]) #, weight_decay=config["WEIGHT_DECAY"])
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5, cooldown=1, min_lr=1e-7)
     
     for epoch in range(config["UNFREEZE_EPOCHS"]):
         global_epoch += 1; tqdm.write(f"\n--- Fase 2 / Epoch {epoch+1}/{config['UNFREEZE_EPOCHS']} (Global: {global_epoch}) ---")
-        train_loss = train_one_epoch(model, train_loader, optimizer, combined_loss, scaler, device, use_amp)
+        train_loss = train_one_epoch(
+            model=model, loader=train_loader, optimizer=optimizer, 
+            seg_loss_fn=combined_loss, contrast_loss_fn=pixel_contrast, seg_w=config["CONTRASTIVE_W"], 
+            scaler=scaler, device=device, use_amp=use_amp
+        )
         val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config)
         scheduler.step(val_miou)
         tqdm.write(f"Risultati Epoch {global_epoch}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f}")

@@ -77,6 +77,10 @@ def get_config() -> Dict[str, Any]:
 
         "FREEZE_EPOCHS": 7, "UNFREEZE_EPOCHS": 23,
         "LR_HEAD": 1e-3, "LR_FULL": 1e-5, "WEIGHT_DECAY": 1e-4,
+
+        "CONTRASTIVE_TEMP": 0.1,      # τ dell’InfoNCE
+        "CONTRASTIVE_MAX_SAMPLES": 4096,  # pixel da campionare per batch
+        "CONTRASTIVE_W": 0.5,         # peso della loss rispetto alle loss di segmento
     }
     
     # FIX: Nomi delle classi anonimi come da richiesta
