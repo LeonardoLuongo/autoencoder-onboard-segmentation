@@ -174,15 +174,15 @@ def get_train_transforms(config: Dict[str, Any]) -> A.Compose:
         A.RandomGamma(p=0.7),
         A.ColorJitter(p=0.7),
         A.GaussianBlur(blur_limit=(3, 5), p=0.4),
-        A.CoarseDropout(
-            max_holes=16, 
-            min_holes=8,
-            max_height=32,
-            min_height=16,
-            max_width=32, 
-            min_width=16,
-            p=0.5
-        ),
+        # A.CoarseDropout(
+        #     max_holes=16, 
+        #     min_holes=8,
+        #     max_height=32,
+        #     min_height=16,
+        #     max_width=32, 
+        #     min_width=16,
+        #     p=0.5
+        # ),
         A.Resize(height=config["OUTPUT_SIZE"][0], width=config["OUTPUT_SIZE"][1]),
         A.Normalize(mean=mean, std=std),
         ToTensorV2(),
@@ -269,8 +269,8 @@ def train_one_epoch(model, loader, optimizer, criterion, scaler, device, use_amp
     model.train(); running_loss = 0.0; progress_bar = tqdm(loader, desc="Training", leave=False)
     for images, masks in progress_bar:
         # Applica CutMix con una certa probabilità
-        if torch.rand(1) < 0.5: # es. 50% di probabilità per batch
-            images, masks = cutmix_batch(images, masks, alpha=1.0)
+        # if torch.rand(1) < 0.5: # es. 50% di probabilità per batch
+        #     images, masks = cutmix_batch(images, masks, alpha=1.0)
 
         images, masks = images.to(device), masks.to(device, dtype=torch.long)
         with autocast(enabled=use_amp, device_type=device.type if use_amp else 'cpu'):
