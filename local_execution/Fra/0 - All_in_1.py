@@ -168,7 +168,8 @@ def get_train_transforms(config: Dict[str, Any]) -> A.Compose:
     """Pipeline di augmentation AGGRESSIVA per risolvere le confusioni specifiche."""
     
     output_size = config["OUTPUT_SIZE"]
-    mean, std = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
+    # mean, std = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225] # image net
+    mean, std = config["MEAN"], config["STD"]
     return A.Compose([
         A.Resize(height=config["OUTPUT_SIZE"][0], width=config["OUTPUT_SIZE"][1]),
         A.HorizontalFlip(p=0.5),

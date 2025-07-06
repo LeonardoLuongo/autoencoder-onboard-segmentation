@@ -164,7 +164,8 @@ def get_train_transforms(config: Dict[str, Any]) -> A.Compose:
     """Pipeline di augmentation AGGRESSIVA per risolvere le confusioni specifiche."""
     
     output_size = config["OUTPUT_SIZE"]
-    mean, std = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
+    # mean, std = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225] # image net
+    mean, std = config["MEAN"], config["STD"]
     return A.Compose([
         A.Resize(height=config["OUTPUT_SIZE"][0], width=config["OUTPUT_SIZE"][1]),
         A.HorizontalFlip(p=0.5),
@@ -256,7 +257,7 @@ def plot_confusion_matrix(conf_matrix_np, class_names, ignore_index, save_path="
     plt.savefig(save_path, dpi=300, bbox_inches='tight'); plt.close(fig)
     tqdm.write(f"Matrice di confusione salvata in '{save_path}'")
 
-def train_one_epoch(model, loader, optimizer, criterion, scaler, device, use_amp):
+def train_one_epoch(model, loader, optimizer, seg_loss_fn, contrast_loss_fn, seg_w, scaler, device, use_amp):
     model.train(); running_loss = 0.0; progress_bar = tqdm(loader, desc="Training", leave=False)
     for images, masks in progress_bar:
         # Applica CutMix con una certa probabilità
@@ -265,7 +266,7 @@ def train_one_epoch(model, loader, optimizer, criterion, scaler, device, use_amp
 
         images, masks = images.to(device), masks.to(device, dtype=torch.long)
         with autocast(enabled=use_amp, device_type=device.type if use_amp else 'cpu'):
-            outputs = model(images); loss = criterion(outputs, masks)
+            outputs = model(images); loss = seg_loss_fn(outputs, masks) + contrast_loss_fn(outputs, masks) * seg_w
         optimizer.zero_grad(); scaler.scale(loss).backward(); scaler.step(optimizer); scaler.update()
         running_loss += loss.item(); progress_bar.set_postfix(loss=f"{loss.item():.4f}")
     return running_loss / len(loader)
@@ -343,6 +344,67 @@ def rand_bbox(size, lam):
     bby2 = np.clip(cy + cut_h // 2, 0, H)
 
     return bbx1, bby1, bbx2, bby2
+
+# =============================================================================
+# 6. PixelContrastiveLoss
+# =============================================================================
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class PixelContrastiveLoss(nn.Module):
+    """
+    Supervised Pixel-wise InfoNCE.
+    * Usa tutti i pixel di un batch fino a `max_samples`
+    * Ignora i pixel con label == ignore_index
+    """
+    def __init__(self,
+                 temperature: float = 0.1,
+                 max_samples: int = 4096,
+                 ignore_index: int = 0):
+        super().__init__()
+        self.temp = temperature
+        self.max_samples = max_samples
+        self.ignore_index = ignore_index
+
+    def forward(self,
+                feats: torch.Tensor,   # (B,C,H,W) – logit o feature
+                labels: torch.Tensor   # (B,H,W)   – int64
+                ) -> torch.Tensor:
+
+        B, C, H, W = feats.shape
+        feats = feats.permute(0, 2, 3, 1).reshape(-1, C)      # (N,C)
+        labels = labels.view(-1)                              # (N,)
+
+        valid = labels != self.ignore_index
+        feats, labels = feats[valid], labels[valid]
+
+        # Campionamento per tenere sotto controllo la memoria GPU
+        if self.max_samples is not None and feats.size(0) > self.max_samples:
+            idx = torch.randperm(feats.size(0), device=feats.device)[:self.max_samples]
+            feats, labels = feats[idx], labels[idx]
+
+        feats = F.normalize(feats, dim=1)                     # unit-sphere
+        logits = torch.mm(feats, feats.t()) / self.temp       # (N,N)
+
+        # Mask per self-pair e per classe
+        N = logits.size(0)
+        self_mask = torch.eye(N, dtype=torch.bool, device=feats.device)
+        class_mask = labels.unsqueeze(0) == labels.unsqueeze(1)   # (N,N)
+
+        # Pos: stessa classe & non self-pair
+        pos_mask = class_mask & (~self_mask)
+        neg_mask = ~class_mask
+
+        exp_logits = torch.exp(logits)
+        pos_sum = (exp_logits * pos_mask).sum(1)              # (N,)
+        all_sum = (exp_logits * (pos_mask | neg_mask)).sum(1)
+
+        # InfoNCE: –log(∑_pos / ∑_all)
+        loss = -(torch.log((pos_sum + 1e-8) / (all_sum + 1e-8))).mean()
+        return loss
+
+
 # =============================================================================
 # 6. FUNZIONE PRINCIPALE (CON AUGMENTATION AGGRESSIVA)
 # =============================================================================
@@ -367,6 +429,11 @@ def main():
     scaler = GradScaler(enabled=use_amp)
     criterion_tversky = TverskyLoss(mode='multiclass', alpha=0.7, beta=0.3).to(device)
     criterion_focal = FocalLoss(mode='multiclass', gamma=2.0).to(device)
+    pixel_contrast = PixelContrastiveLoss(
+        temperature=config["CONTRASTIVE_TEMP"],
+        max_samples=config["CONTRASTIVE_MAX_SAMPLES"],
+        ignore_index=config["IGNORE_INDEX"]
+    ).to(device)
 
     def combined_loss(pred, target):
         return 0.5 * criterion_tversky(pred, target) + 0.5 * criterion_focal(pred, target)
@@ -376,12 +443,16 @@ def main():
     # --- FASE 1: FREEZE ENCODER, TRAIN DECODER ---
     tqdm.write("\n--- INIZIO FASE 1: TRAINING DEL DECODER (ENCODER CONGELATO) ---")
     for param in model.encoder.parameters(): param.requires_grad = False
-    optimizer = optim.AdamW(list(model.decoder.parameters()) + list(model.segmentation_head.parameters()), lr=config["LR_HEAD"], weight_decay=config["WEIGHT_DECAY"])
+    optimizer = optim.Adam(list(model.decoder.parameters()) + list(model.segmentation_head.parameters()), lr=config["LR_HEAD"], weight_decay=config["WEIGHT_DECAY"])
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=2, factor=0.5)
 
     for epoch in range(config["FREEZE_EPOCHS"]):
         global_epoch += 1; tqdm.write(f"\n--- Fase 1 / Epoch {epoch+1}/{config['FREEZE_EPOCHS']} (Global: {global_epoch}) ---")
-        train_loss = train_one_epoch(model, train_loader, optimizer, combined_loss, scaler, device, use_amp)
+        train_loss = train_one_epoch(
+            model=model, loader=train_loader, optimizer=optimizer, 
+            seg_loss_fn=combined_loss, contrast_loss_fn=pixel_contrast, seg_w=config["CONTRASTIVE_W"], 
+            scaler=scaler, device=device, use_amp=use_amp
+        )
         val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config)
         scheduler.step(val_miou)
         tqdm.write(f"Risultati Epoch {global_epoch}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f}")
@@ -393,12 +464,16 @@ def main():
     # --- FASE 2: UNFREEZE ALL, FINE-TUNE ---
     tqdm.write("\n--- INIZIO FASE 2: FINE-TUNING DELL'INTERA RETE (ENCODER SCONGELATO) ---")
     for param in model.encoder.parameters(): param.requires_grad = True
-    optimizer = optim.AdamW(model.parameters(), lr=config["LR_FULL"], weight_decay=config["WEIGHT_DECAY"])
+    optimizer = optim.Adam(model.parameters(), lr=config["LR_FULL"], weight_decay=config["WEIGHT_DECAY"])
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5, cooldown=1, min_lr=1e-7)
     
     for epoch in range(config["UNFREEZE_EPOCHS"]):
         global_epoch += 1; tqdm.write(f"\n--- Fase 2 / Epoch {epoch+1}/{config['UNFREEZE_EPOCHS']} (Global: {global_epoch}) ---")
-        train_loss = train_one_epoch(model, train_loader, optimizer, combined_loss, scaler, device, use_amp)
+        train_loss = train_one_epoch(
+            model=model, loader=train_loader, optimizer=optimizer, 
+            seg_loss_fn=combined_loss, contrast_loss_fn=pixel_contrast, seg_w=config["CONTRASTIVE_W"], 
+            scaler=scaler, device=device, use_amp=use_amp
+        )
         val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config)
         scheduler.step(val_miou)
         tqdm.write(f"Risultati Epoch {global_epoch}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f}")
