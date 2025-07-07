@@ -178,6 +178,7 @@ def calculate_mean_std(loader: DataLoader) -> Tuple[np.ndarray, np.ndarray]:
     pixel_count = 0
 
     for images, _ in tqdm(loader, desc="Analisi Statistiche Dataset"):
+        images = images.float() / 255.0 
         batch_size, num_channels, height, width = images.shape
         psum += images.sum(axis=[0, 2, 3])
         psum_sq += (images ** 2).sum(axis=[0, 2, 3])
@@ -200,10 +201,13 @@ def calculate_mean_std(loader: DataLoader) -> Tuple[np.ndarray, np.ndarray]:
     
     return mean_np, std_np
 
-def get_cpu_transforms(config):
+def get_cpu_transforms(cfg):
     return A.Compose([
-        A.Resize(height=config["OUTPUT_SIZE"][0], width=config["OUTPUT_SIZE"][1]),
-        ToTensorV2(),     
+        A.Resize(height=cfg["OUTPUT_SIZE"][0], width=cfg["OUTPUT_SIZE"][1]),
+        # ①  ToTensorV2 porta l’immagine da uint8 → float32 e la scala 0-1
+        ToTensorV2(),
+        # ②  Normalizziamo SUBITO con mean/std calcolati su range 0-1
+        A.Normalize(mean=cfg["MEAN"], std=cfg["STD"]),
     ])
 
 def get_gpu_augmentations(config: Dict[str, Any], aggressive_p: float = 0.5) -> nn.Module:
@@ -335,12 +339,8 @@ def train_one_epoch(model, loader, optimizer, scheduler, loss_function, scaler, 
     progress_bar = tqdm(loader, desc="Training", leave=False)
     
     for step, (images, masks) in enumerate(progress_bar):
-        images = images.float() / 255.0
         images, raw_masks = gpu_augmentations(images, masks.float())
         masks_long = raw_masks.long()
-        images = K.Normalize(mean=torch.tensor(mean, device=images.device),
-                     std=torch.tensor(std,  device=images.device)
-                    )(images)
 
         if current_epoch <= total_epochs - 5 and torch.rand(1) < 0.5:
             images, masks_long = cutmix_batch(images, masks_long, alpha=1.0)
