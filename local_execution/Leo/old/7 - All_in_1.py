@@ -539,9 +539,11 @@ def main():
     #                     ignore_index=config["IGNORE_INDEX"]
     #                 ).to(device)
     steps = -1
-    def combined_loss(pred, target, feats):
+    def combined_loss(pred, target, feats=None):
+        nonlocal steps
         steps = steps + 1
-        if steps % 50 == 0:
+
+        if feats is not None and steps % 150 == 0:
             mask_ds = F.interpolate(
                 target.unsqueeze(1).float(),
                 size=feats.shape[2:], mode="nearest"
@@ -559,7 +561,7 @@ def main():
             #     loss = seg_loss_fn(outputs, masks) + contrast_loss_fn(feats, mask_ds) * seg_w
             # else:
             #     loss = seg_loss_fn(outputs, masks)
-        elif steps % 10 == 0:
+        elif steps % 50 == 0:
             return 0.4 * criterion_ft(pred, target) + 0.6 * lovasz_softmax(F.softmax(pred, dim=1), target, ignore=config["IGNORE_INDEX"]) 
         else:
             return criterion_ft(pred, target)
