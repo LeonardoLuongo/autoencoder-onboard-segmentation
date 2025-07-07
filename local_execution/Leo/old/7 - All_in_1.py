@@ -44,7 +44,7 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 import matplotlib.pyplot as plt
 import seaborn as sns
-from lovesz import lovasz_softmax
+from segmentation_models_pytorch.losses import LovaszLoss
 
 # =============================================================================
 # 2. RIPRODUCIBILITÀ
@@ -74,7 +74,7 @@ def get_config() -> Dict[str, Any]:
         "MODEL_SAVE_PATH": os.path.join(base_path, "best_model_b3.pth"),
 
         "ENCODER": "efficientnet-b3", "ENCODER_WEIGHTS": "imagenet",
-        "OUTPUT_SIZE": (384, 768), "BATCH_SIZE": 8, 
+        "OUTPUT_SIZE": (384, 768), "BATCH_SIZE": 4, 
         "NUM_CLASSES": 9, "IGNORE_INDEX": 0, "VALIDATION_SPLIT": 0.2,
 
         "FREEZE_EPOCHS": 7, "UNFREEZE_EPOCHS": 23,
@@ -495,19 +495,6 @@ class FocalTverskyLoss(nn.Module):
 
         return loss.mean()
 
-# =============================================================================
-# LovaszSoftmax Loss
-# =============================================================================
-
-
-class LovaszLoss(nn.Module):
-    def __init__(self, ignore_index=0):
-        super().__init__()
-        self.ignore_index = ignore_index
-    def forward(self, logits, targets):
-        # Lovasz-softmax richiede le probabilità, non i logits
-        probas = F.softmax(logits, dim=1)
-        return lovasz_softmax(probas, targets, ignore=self.ignore_index)
 
 # =============================================================================
 # 6. FUNZIONE PRINCIPALE (CON AUGMENTATION AGGRESSIVA)
@@ -545,7 +532,7 @@ def main():
     ).to(device)
 
     # Aggiungiamo la Lovasz
-    criterion_lovasz = LovaszLoss(ignore_index=config["IGNORE_INDEX"]).to(device)
+    criterion_lovasz = LovaszLoss(mode='multiclass',ignore_index=config["IGNORE_INDEX"]).to(device)
 
     criterion_ft  = FocalTverskyLoss(
                     alpha=0.9, beta=0.1, gamma=3.0,
