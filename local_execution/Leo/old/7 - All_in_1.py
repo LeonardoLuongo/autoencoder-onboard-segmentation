@@ -744,57 +744,15 @@ if __name__ == "__main__":
     main()
 
 '''
-Traceback (most recent call last):                                                                                                                                 
-  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\Leo\old\7 - All_in_1.py", line 743, in <module>
-    main()
-  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\Leo\old\7 - All_in_1.py", line 665, in main
-    train_loss = train_one_epoch(
-                 ^^^^^^^^^^^^^^^^
-  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\Leo\old\7 - All_in_1.py", line 342, in train_one_epoch
-    for step, (images, masks) in enumerate(progress_bar):
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\tqdm\std.py", line 1181, in __iter__
-    for obj in iterable:
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\dataloader.py", line 733, in __next__
-    data = self._next_data()
-           ^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\dataloader.py", line 1515, in _next_data
-    return self._process_data(data, worker_id)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\dataloader.py", line 1550, in _process_data
-    data.reraise()
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\_utils.py", line 750, in reraise
-    raise exception
-AttributeError: Caught AttributeError in DataLoader worker process 0.
-Original Traceback (most recent call last):
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\_utils\worker.py", line 349, in _worker_loop
-    data = fetcher.fetch(index)  # type: ignore[possibly-undefined]
-           ^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\_utils\fetch.py", line 52, in fetch
-    data = [self.dataset[idx] for idx in possibly_batched_index]
-            ~~~~~~~~~~~~^^^^^
-  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\Leo\old\7 - All_in_1.py", line 250, in __getitem__
-    augmented = self.transform(image=image, mask=mask)
-                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\albumentations\core\composition.py", line 610, in __call__
-    data = t(**data)
-           ^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\albumentations\core\transforms_interface.py", line 273, in __call__
-    return self.apply_with_params(params, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\albumentations\core\transforms_interface.py", line 310, in apply_with_params
-    target_function(ensure_contiguous_output(arg), **params),
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\albumentations\augmentations\pixel\transforms.py", line 246, in apply
-    return normalize(
-           ^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\albucore\functions.py", line 332, in normalize
-    return normalize_opencv(img, mean, denominator)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\albucore\decorators.py", line 42, in wrapped_function
-    result = func(img, *args, **kwargs)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\albucore\functions.py", line 286, in normalize_opencv
-    img = img.astype(np.float32, copy=False)
-          ^^^^^^^^^^
-AttributeError: 'Tensor' object has no attribute 'astype'. Did you mean: 'dtype'?
+
+--- INIZIO FASE 1: TRAINING DEL DECODER (ENCODER CONGELATO) ---
+
+--- Fase 1 / Epoch 1/7 (Global: 1) ---
+Training:   0%|                                                                                                                           | 0/174 [00:00<?, ?it/s]C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\nn\functional.py:5082: UserWarning: Default grid_sample and affine_grid behavior has changed to align_corners=False since 1.3.0. Please specify align_corners=True if the old behavior is desired. See the documentation of grid_sample for details.
+  warnings.warn(
+:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\nn\functional.py:5082: UserWarning: Default grid_sample and affine_grid behavior has changed to align_corners=False since 1.3.0. Please specify align_corners=True if the old behavior is desired. See the documentation of grid_sample for details.
+  warnings.warn(
+C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\nn\functional.py:5015: UserWarning: Default grid_sample and affine_grid behavior has changed to align_corners=False since 1.3.0. Please specify align_corners=True if the old behavior is desired. See the documentation of grid_sample for details.
+  warnings.warn(
+C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\optim\lr_scheduler.py:182: UserWarning: Detected call of `lr_scheduler.step()` before `optimizer.step()`. In PyTorch 1.1.0 and later, you should call them in the opposite order: `optimizer.step()` before `lr_scheduler.step()`.  Failure to do this will result in PyTorch skipping the first value of the learning rate schedule. See more details at https://pytorch.org/docs/stable/optim.html#how-to-adjust-learning-rat
 '''
