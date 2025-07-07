@@ -595,7 +595,7 @@ def main():
     # FIX: Aggiunto align_corners=False per silenziare l'avviso di Kornia
     def get_gpu_augmentations(config: Dict[str, Any], aggressive_p: float = 0.5) -> nn.Module:
         gpu_aug = K.AugmentationSequential(
-            K.RandomHorizontalFlip(p=0.5, align_corners=False),
+            K.RandomHorizontalFlip(p=0.5),
             K.RandomVerticalFlip(p=aggressive_p / 2, align_corners=False),
             K.RandomRotation(degrees=90, p=aggressive_p, align_corners=False), # FIX
             K.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.7, align_corners=False),
@@ -741,3 +741,26 @@ def main():
 # =============================================================================
 if __name__ == "__main__":
     main()
+
+'''
+> & "C:/Program Files/Python312/python.exe" "d:/MLPoject-Git/autoencoder-onboard-segmentation/local_execution/Leo/old/7 - All_in_1.py"
+Statistiche personalizzate calcolate e caricate nella configurazione.
+Traceback (most recent call last):
+  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\Leo\old\7 - All_in_1.py", line 743, in <module>
+    main()
+  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\Leo\old\7 - All_in_1.py", line 579, in main
+    cache  = load_or_compute_preprocessing(config)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\Leo\old\7 - All_in_1.py", line 128, in load_or_compute_preprocessing
+    cache = torch.load(CACHE_PATH)
+            ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\serialization.py", line 1524, in load
+    raise pickle.UnpicklingError(_get_wo_message(str(e))) from None
+_pickle.UnpicklingError: Weights only load failed. This file can still be loaded, to do so you have two options, do those steps only if you trust the source of the checkpoint.
+        (1) In PyTorch 2.6, we changed the default value of the `weights_only` argument in `torch.load` from `False` to `True`. Re-running `torch.load` with `weights_only` set to `False` will likely succeed, but it can result in arbitrary code execution. Do it only if you got the file from a trusted source.
+        (2) Alternatively, to load with `weights_only=True` please check the recommended steps in the following error message.
+        WeightsUnpickler error: Unsupported global: GLOBAL numpy.core.multiarray._reconstruct was not an allowed global by default. Please use `torch.serialization.add_safe_globals([numpy.core.multiarray._reconstruct])` or the `torch.serialization.safe_globals([numpy.core.multiarray._reconstruct])` context manager to allowlist this global if you trust this class/function.
+
+Check the documentation of torch.load to learn more about types accepted by default with weights_only https://pytorch.org/docs/stable/generated/torch.load.html. 
+
+'''
