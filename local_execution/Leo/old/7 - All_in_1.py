@@ -702,3 +702,10 @@ def main():
 if __name__ == "__main__":
     main()
 
+'''
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\kornia\augmentation\_2d\base.py", line 56, in transform_tensor
+    _validate_input_dtype(input, accepted_dtypes=[float16, float32, float64])
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\kornia\augmentation\utils\helpers.py", line 222, in _validate_input_dtype
+    raise TypeError(f"Expected input of {accepted_dtypes}. Got {input.dtype}")
+TypeError: Expected input of [torch.float16, torch.float32, torch.float64]. Got torch.uint8
+'''
