@@ -169,14 +169,10 @@ def calculate_mean_std(loader: DataLoader) -> Tuple[np.ndarray, np.ndarray]:
     
     return mean_np, std_np
 
-def get_cpu_transforms(config: Dict[str, Any]) -> A.Compose:
-    """Pipeline CPU: solo le operazioni leggere e necessarie."""
+def get_cpu_transforms(config):
     return A.Compose([
-        # Resize è l'unica trasformazione geometrica che teniamo qui
         A.Resize(height=config["OUTPUT_SIZE"][0], width=config["OUTPUT_SIZE"][1]),
-        # Normalize e ToTensorV2 devono essere le ultime
-        A.Normalize(mean=config["MEAN"], std=config["STD"]),
-        ToTensorV2(),
+        ToTensorV2(),     
     ])
 
 def get_gpu_augmentations(config: Dict[str, Any], aggressive_p: float = 0.5) -> nn.Module:
@@ -302,7 +298,7 @@ def plot_confusion_matrix(conf_matrix_np, class_names, ignore_index, save_path="
     plt.savefig(save_path, dpi=300, bbox_inches='tight'); plt.close(fig)
     tqdm.write(f"Matrice di confusione salvata in '{save_path}'")
 
-def train_one_epoch(model, loader, optimizer, scheduler, loss_function, scaler, device, use_amp, current_epoch, total_epochs, gpu_augmentations: nn.Module, need_feats=False, clip_grad_norm=1.0) -> float:
+def train_one_epoch(model, loader, optimizer, scheduler, loss_function, scaler, device, use_amp, current_epoch, total_epochs, gpu_augmentations: nn.Module, mean, std, need_feats=False, clip_grad_norm=1.0) -> float:
     model.train()
     running_loss = 0.0
     progress_bar = tqdm(loader, desc="Training", leave=False)
@@ -310,6 +306,9 @@ def train_one_epoch(model, loader, optimizer, scheduler, loss_function, scaler, 
     for step, (images, masks) in enumerate(progress_bar):
         images, raw_masks = gpu_augmentations(images, masks.float())
         masks_long = raw_masks.long()
+        images = K.Normalize(mean=torch.tensor(mean, device=images.device),
+                     std=torch.tensor(std,  device=images.device)
+                    )(images)
 
         if current_epoch <= total_epochs - 5 and torch.rand(1) < 0.5:
             images, masks_long = cutmix_batch(images, masks_long, alpha=1.0)
@@ -607,9 +606,9 @@ def main():
             return loss_segmentation
         
         mask_ds = F.interpolate(
-            target.float(),
+            target.unsqueeze(1).float(),
             size=feats.shape[2:], mode="nearest"
-        ).squeeze(1).long()
+         ).squeeze(1).long()
         # FIX: Usa CONTRASTIVE_W come peso, non TEMP
         loss_contrast = pixel_contrast(feats, mask_ds) * config["CONTRASTIVE_W"]
         return loss_segmentation + loss_contrast
@@ -628,7 +627,7 @@ def main():
             loss_function=loss_phase1, scaler=scaler, device=device, use_amp=use_amp, 
             current_epoch=epoch, total_epochs=config["FREEZE_EPOCHS"], 
             gpu_augmentations=gpu_augmentations_freeze, need_feats=True,
-            clip_grad_norm=1.0
+            clip_grad_norm=1.0, mean=config["MEAN"], std=config["STD"]
         )
         # FIX: Usa una loss di validazione che non richiede 'feats'
         val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, criterion_ft, device, config)
@@ -654,7 +653,7 @@ def main():
         train_loss = train_one_epoch(
             model=model, loader=train_loader, optimizer=optimizer, scheduler=None, loss_function=loss_phase2, 
             scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["UNFREEZE_EPOCHS"], 
-            gpu_augmentations=gpu_augmentations_unfreeze, need_feats=False, clip_grad_norm=1.0
+            gpu_augmentations=gpu_augmentations_unfreeze, need_feats=False, clip_grad_norm=1.0, mean=config["MEAN"], std=config["STD"]
         )
         val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, loss_phase2, device, config)
         scheduler_plateau.step(val_miou)
@@ -680,7 +679,7 @@ def main():
         train_loss = train_one_epoch(
             model=model, loader=train_loader, optimizer=optimizer, scheduler=None, loss_function=loss_phase3, 
             scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["FINE_TUNING_EPOCHS"], 
-            gpu_augmentations=gpu_augmentations_unfreeze, need_feats=False, clip_grad_norm=1.0
+            gpu_augmentations=gpu_augmentations_unfreeze, need_feats=False, clip_grad_norm=1.0, mean=config["MEAN"], std=config["STD"]
         )
         val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, loss_phase3, device, config)
         scheduler_plateau.step(val_miou)
