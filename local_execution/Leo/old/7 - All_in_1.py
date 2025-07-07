@@ -45,8 +45,6 @@ from albumentations.pytorch import ToTensorV2
 import matplotlib.pyplot as plt
 import seaborn as sns
 from lovasz import lovasz_softmax
-import kornia.augmentation as K
-import kornia.geometry as G
 
 # =============================================================================
 # 2. RIPRODUCIBILITÀ
@@ -67,7 +65,7 @@ def get_config() -> Dict[str, Any]:
     base_path = "./"
     config = {
         "DEVICE": torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
-        "RANDOM_SEED": 42, "NUM_WORKERS_TRAIN": 3, "NUM_WORKERS_VAL": 2, "USE_AMP": True,
+        "RANDOM_SEED": 42, "NUM_WORKERS_TRAIN": 4, "NUM_WORKERS_VAL": 2, "USE_AMP": True,
         "PERSISTENT_WORKERS": True, "RARE_CLASS_INDICES": [4, 6], "RARE_BOOST_FACTOR": 25.0,
         
         "DATASET_PATH_TRAIN": os.path.join(base_path, "dataset/training/train"),
@@ -76,24 +74,60 @@ def get_config() -> Dict[str, Any]:
         "MODEL_SAVE_PATH": os.path.join(base_path, "best_model_b3.pth"),
 
         "ENCODER": "efficientnet-b3", "ENCODER_WEIGHTS": "imagenet",
-        "OUTPUT_SIZE": (384, 768), "BATCH_SIZE": 16, 
+        "OUTPUT_SIZE": (384, 768), "BATCH_SIZE": 3, 
         "NUM_CLASSES": 9, "IGNORE_INDEX": 0, "VALIDATION_SPLIT": 0.2,
 
         "FREEZE_EPOCHS": 7, "UNFREEZE_EPOCHS": 23, "FINE_TUNING_EPOCHS": 10,
         "LR_HEAD": 1e-3, "LR_FULL": 1e-4, "WEIGHT_DECAY": 1e-6,
 
         "CONTRASTIVE_TEMP": 0.1,      # τ dell’InfoNCE
-        "CONTRASTIVE_MAX_SAMPLES": 4096,  # pixel da campionare per batch
-        "CONTRASTIVE_W": 0.6,         # peso della loss rispetto alle loss di segmento
+        "CONTRASTIVE_MAX_SAMPLES": 4096*3,  # pixel da campionare per batch
+        "CONTRASTIVE_W": 1,         # peso della loss rispetto alle loss di segmento
     }
     
     # FIX: Nomi delle classi anonimi come da richiesta
     config["CLASS_NAMES"] = ["Ignored"] + [f"Classe {i}" for i in range(1, config["NUM_CLASSES"])]
 
+    # --- CALCOLO CORRETTO DI MEDIA E DEVIAZIONE STANDARD ---
+    # tqdm.write("Preparazione per il calcolo delle statistiche del dataset...")
+    
+    # # 1. Pipeline di trasformazione SENZA A.Normalize
+    # stats_transforms = A.Compose([
+    #     A.Resize(height=config["OUTPUT_SIZE"][0], width=config["OUTPUT_SIZE"][1]),
+    #     # ToTensorV2 è fondamentale perché scala le immagini da [0, 255] a [0, 1]
+    #     A.Normalize(mean=(0.0, 0.0, 0.0), std=(1.0, 1.0, 1.0), max_pixel_value=255.0),
+    #     ToTensorV2(),
+    # ])
 
-    tqdm.write("Statistiche personalizzate calcolate e caricate nella configurazione.")
+    # # 2. Crea un Dataset temporaneo usando solo i dati originali
+    # train_original_dirs = [d for d in glob.glob(os.path.join(config["DATASET_PATH_TRAIN"], "*")) if os.path.isdir(d)]
+    # stats_dataset = SegmentationDataset(
+    #     sample_dirs=train_original_dirs,
+    #     transform=stats_transforms,
+    #     config=config  # Passa la config per l'assert nel dataset
+    # )
+
+    # # 3. Avvolgi il Dataset in un DataLoader (IL FIX FONDAMENTALE)
+    # stats_loader = DataLoader(
+    #     stats_dataset, 
+    #     batch_size=config["BATCH_SIZE"] * 2, # Possiamo usare un batch size più grande qui
+    #     shuffle=False, 
+    #     num_workers=config["NUM_WORKERS_TRAIN"],
+    #     persistent_workers=config["PERSISTENT_WORKERS"]
+    # )
+    
+    # # 4. Ora chiama la funzione con il DataLoader
+    # mean, std = calculate_mean_std(stats_loader)
+
+    # assert 0.0 <= mean.min() and mean.max() <= 1.0,  "Mean fuori range 0-1"
+    # assert 0.0 <  std.min()  and std.max()  <  1.0,  "Std anomala"
+    
+    # # 5. Salva i valori calcolati nella configurazione
+    # config["MEAN"] = mean
+    # config["STD"] = std
+
+    # tqdm.write("Statistiche personalizzate calcolate e caricate nella configurazione.")
     return config
-
 
 
 import hashlib, json, torch, os, pickle
@@ -178,7 +212,6 @@ def calculate_mean_std(loader: DataLoader) -> Tuple[np.ndarray, np.ndarray]:
     pixel_count = 0
 
     for images, _ in tqdm(loader, desc="Analisi Statistiche Dataset"):
-        images = images.float() / 255.0 
         batch_size, num_channels, height, width = images.shape
         psum += images.sum(axis=[0, 2, 3])
         psum_sq += (images ** 2).sum(axis=[0, 2, 3])
@@ -201,36 +234,36 @@ def calculate_mean_std(loader: DataLoader) -> Tuple[np.ndarray, np.ndarray]:
     
     return mean_np, std_np
 
-def get_cpu_transforms(cfg: dict) -> A.Compose:
-    tf = [
-        A.Resize(height=cfg["OUTPUT_SIZE"][0], width=cfg["OUTPUT_SIZE"][1])
-    ]
-    if "MEAN" in cfg and "STD" in cfg:    # ← li aggiunge solo se ci sono
-        tf.append(A.Normalize(mean=cfg["MEAN"], std=cfg["STD"]))
-        
-    tf.append(ToTensorV2())
-    return A.Compose(tf)
+def get_train_transforms(config: Dict[str, Any], aggressive_p: float = 0.5) -> A.Compose:
+    """Pipeline di augmentation AGGRESSIVA per risolvere le confusioni specifiche."""
+    
+    output_size = config["OUTPUT_SIZE"]
+    # mean, std = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225] # image net
+    mean, std = config["MEAN"], config["STD"]
+    return A.Compose([
+        # A.HorizontalFlip(p=0.5),
+        # A.VerticalFlip(p=aggressive_p/2),
+        # A.RandomRotate90(p=aggressive_p),
+        # A.RandomBrightnessContrast(p=0.7),
+        # A.RandomGamma(p=0.7),
+        # A.ColorJitter(p=0.7),
+        # A.GaussianBlur(blur_limit=(3, 5), p=0.4),
+        # # A.CoarseDropout(
+        # #     max_holes=16, 
+        # #     min_holes=8,
+        # #     max_height=32,
+        # #     min_height=16,
+        # #     max_width=32, 
+        # #     min_width=16,
+        # #     p=0.5
+        # # ),
+        A.Resize(height=config["OUTPUT_SIZE"][0], width=config["OUTPUT_SIZE"][1]),
+        A.Normalize(mean=mean, std=std),
+        ToTensorV2(),
+    ])
 
-
-def get_gpu_augmentations(config: Dict[str, Any], aggressive_p: float = 0.5) -> nn.Module:
-    """Pipeline GPU: tutte le augmentation pesanti, definite come un modulo nn.Sequential."""
-    # Kornia lavora direttamente su tensori (B, C, H, W)
-    gpu_aug = K.AugmentationSequential(
-        K.RandomHorizontalFlip(p=0.5, align_corners=False),
-        K.RandomVerticalFlip(p=aggressive_p / 2, align_corners=False),
-        K.RandomRotation(degrees=90, p=aggressive_p, align_corners=False),
-        K.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.7, align_corners=False),
-        K.RandomGamma(gamma=(0.8, 1.2), p=0.7, align_corners=False),
-        K.RandomGaussianBlur(kernel_size=(3, 5), sigma=(0.1, 2.0), p=0.4, align_corners=False),
-        # Aggiungiamo il flag per sincronizzare le trasformazioni tra immagine e maschera
-        data_keys=["input", "mask"],
-        same_on_batch=False # Applica una trasformazione diversa a ogni immagine nel batch
-    )
-    return gpu_aug.to(config["DEVICE"])
-
-# La pipeline di validazione rimane su CPU perché non ha augmentation random
 def get_val_transforms(output_size: Tuple[int, int], mean: float, std: float) -> A.Compose:
-    """Pipeline di validazione (solo preprocessing su CPU)."""
+    """Pipeline di validazione (solo preprocessing)."""
     return A.Compose([
         A.Resize(height=output_size[0], width=output_size[1], interpolation=cv2.INTER_NEAREST),
         A.Normalize(mean=mean, std=std),
@@ -335,49 +368,24 @@ def plot_confusion_matrix(conf_matrix_np, class_names, ignore_index, save_path="
     plt.savefig(save_path, dpi=300, bbox_inches='tight'); plt.close(fig)
     tqdm.write(f"Matrice di confusione salvata in '{save_path}'")
 
-def train_one_epoch(model, loader, optimizer, scheduler, loss_function, scaler, device, use_amp, current_epoch, total_epochs, gpu_augmentations: nn.Module, mean, std, need_feats=False, clip_grad_norm=1.0) -> float:
-    model.train()
-    running_loss = 0.0
-    progress_bar = tqdm(loader, desc="Training", leave=False)
-    
+def train_one_epoch(model, loader, optimizer, scheduler, loss_function, scaler, device, use_amp, current_epoch, total_epochs, ignore_index=None) -> float:
+    model.train(); running_loss = 0.0; progress_bar = tqdm(loader, desc="Training", leave=False)
     for step, (images, masks) in enumerate(progress_bar):
-        images, raw_masks = gpu_augmentations(images, masks.float())
-        images.clamp_(0., 1.)
-        masks_long = raw_masks.long()
+        # Applica CutMix con una certa probabilità
+        if current_epoch <= total_epochs - 5 and torch.rand(1) < 0.5: # es. 50% di probabilità per batch
+            images, masks = cutmix_batch(images, masks, alpha=1.0)
 
-        if current_epoch <= total_epochs - 5 and torch.rand(1) < 0.5:
-            images, masks_long = cutmix_batch(images, masks_long, alpha=1.0)
-
-        images, masks_long = images.to(device), masks_long.to(device, dtype=torch.long)
-        
-        optimizer.zero_grad()
-
+        images, masks = images.to(device), masks.to(device, dtype=torch.long)
         with autocast(enabled=use_amp, device_type=device.type if use_amp else 'cpu'):
-            outputs = model(images)
-            feats = model.encoder(images)[-1] if need_feats else None
-            # Passiamo a loss_function le maschere nel formato che si aspetta (B, 1, H, W)
-            loss = loss_function(outputs, masks_long, feats)
+            outputs = model(images); 
+            feats = model.encoder(images)[-1]
+            loss = loss_function(outputs, masks, feats)
 
-        # Scaliamo la loss e calcoliamo i gradienti
-        scaler.scale(loss).backward()
-        
-        # --- FIX: GRADIENT CLIPPING ---
-        # Prima di optimizer.step(), de-scaliamo i gradienti per poterli "vedere" e clippare
-        scaler.unscale_(optimizer)
-        # Applichiamo il clipping
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_grad_norm)
-        # -----------------------------
-
-        # Ora l'optimizer può fare il suo passo
-        scaler.step(optimizer)
-        scaler.update()
-        
+        optimizer.zero_grad(); scaler.scale(loss).backward(); scaler.step(optimizer); scaler.update(); 
         if scheduler is not None:
             scheduler.step()
 
-        running_loss += loss.item()
-        progress_bar.set_postfix(loss=f"{loss.item():.4f}")
-        
+        running_loss += loss.item(); progress_bar.set_postfix(loss=f"{loss.item():.4f}")
     return running_loss / len(loader)
 
 def evaluate(model, loader, criterion, device, config) -> Tuple[float, float, np.ndarray, np.ndarray]:
@@ -527,27 +535,13 @@ class FocalTverskyLoss(nn.Module):
 
     def forward(self, logits, targets):
         probs = torch.softmax(logits, dim=1)
-
-        # --- FIX QUI ---
-        # Assicuriamoci che 'targets' sia (B, H, W) e non (B, 1, H, W)
-        # prima di passarlo a one_hot.
-        if targets.dim() == 4 and targets.shape[1] == 1:
-            targets_squeezed = targets.squeeze(1)
-        else:
-            targets_squeezed = targets
-        
         true  = torch.nn.functional.one_hot(
-                    targets_squeezed, num_classes=logits.size(1)
+                    targets, num_classes=logits.size(1)
                 ).permute(0,3,1,2).float()
 
         if self.ignore is not None:
-            # Usiamo 'targets' originale (che potrebbe essere 4D) per la maschera
             mask = targets != self.ignore
-            # Assicuriamo che la maschera possa essere trasmessa (broadcast) correttamente
-            if mask.dim() == 3:
-                mask = mask.unsqueeze(1) # Da (B, H, W) a (B, 1, H, W)
-            
-            probs, true = probs*mask, true*mask
+            probs, true = probs*mask[:,None], true*mask[:,None]
 
         dims = (0,2,3)
         TP = (probs*true).sum(dims)
@@ -558,18 +552,8 @@ class FocalTverskyLoss(nn.Module):
         loss = (1 - TI).pow(self.gamma)  # focalizzazione
 
         if self.cw is not None:
-            # Applica i pesi alle classi. Assicurati che cw sia broadcast-able.
-            loss = loss * self.cw.view(1, -1).squeeze(0)
+            loss = loss * self.cw
 
-        # Rimuovi le classi ignorate dal calcolo della media finale
-        if self.ignore is not None and self.cw is not None:
-            valid_classes_mask = torch.ones_like(self.cw, dtype=torch.bool)
-            # Ignora la classe 0 e tutte le altre classi con peso 0 se necessario
-            valid_classes_mask[self.ignore] = False
-            
-            # Calcola la media solo sulle classi valide
-            return loss[valid_classes_mask].mean()
-        
         return loss.mean()
 
 
@@ -577,7 +561,7 @@ class FocalTverskyLoss(nn.Module):
 # 6. FUNZIONE PRINCIPALE (CON AUGMENTATION AGGRESSIVA)
 # =============================================================================
 def main():
-    config = get_config()
+    config = get_config(); 
     cache  = load_or_compute_preprocessing(config)
 
     # sovrascrivi i campi in config così il resto dello script non cambia
@@ -586,36 +570,18 @@ def main():
     class_weights                   = cache["class_weights"].to(config["DEVICE"])
     assert 0.0 <= config["MEAN"].min() and config["MEAN"].max() <= 1.0,  "Mean fuori range 0-1"
     assert 0.0 <  config["STD"].min()  and config["STD"].max()  <  1.0,  "Std anomala"
-
+    
+    
     seed_everything(config["RANDOM_SEED"]); device = config["DEVICE"]
     use_amp = config["USE_AMP"] and AMP_AVAILABLE and device.type == 'cuda'
     tqdm.write(f"Device: {device} | Mixed Precision: {use_amp}"); tqdm.write(f"Strategia Finale: {config['ENCODER']} con Augmentation Mirata")
-    
-    cpu_transforms = get_cpu_transforms(config)
+
+    # train_dirs, val_dirs = get_grouped_stratified_split(config)
+    # Pipeline di augmentation diverse per training e validazione
+    train_transforms = get_train_transforms(config, aggressive_p=0.1) 
     val_transforms = get_val_transforms(config["OUTPUT_SIZE"], config["MEAN"], config["STD"])
-        
-    def build_gpu_augs(cfg, p=0.5):
-        return K.AugmentationSequential(
-            K.RandomHorizontalFlip(p=0.5),
-            K.RandomVerticalFlip( p=p/2),
-            K.RandomRotation(     degrees=90,
-                                p=p,
-                                resample="bilinear", padding_mode="border"),
-            K.ColorJitter( brightness=0.2, contrast=0.2,
-                        saturation=0.2, hue=0.1,
-                        p=0.7),
-            K.RandomGamma(  gamma=(0.8,1.2), p=0.7),
-            K.RandomGaussianBlur(kernel_size=(3,5), sigma=(0.1,2.0),
-                                p=0.4),
-            data_keys=["input", "mask"],
-            same_on_batch=False
-        ).to(cfg["DEVICE"])
-
-
-    gpu_augmentations_freeze = build_gpu_augs(config, p=0.1)
-    gpu_augmentations_unfreeze = build_gpu_augs(config, p=0.5)
-
-    train_dataset = SegmentationDataset(train_dirs, cpu_transforms, config)
+    
+    train_dataset = SegmentationDataset(train_dirs, train_transforms, config)
     val_dataset = SegmentationDataset(val_dirs, val_transforms, config)
     
     pin_mem = device.type == 'cuda'
@@ -624,115 +590,103 @@ def main():
 
     model = get_model(config).to(device)
     scaler = GradScaler(enabled=use_amp)
+    # Calcola i pesi per la loss sul training set (la funzione va definita sopra)
+    # class_weights = calculate_class_weights(train_dataset, config)
 
+    # criterion_tversky = TverskyLoss(mode='multiclass', alpha=0.7, beta=0.3).to(device)
+    # criterion_ce = nn.CrossEntropyLoss(weight=class_weights, ignore_index=config["IGNORE_INDEX"])
+    # criterion_focal = FocalLoss(mode='multiclass', gamma=2.0).to(device)
+    # criterion_dice = DiceLoss(mode='multiclass', ignore_index=config["IGNORE_INDEX"]).to(device)
+    
     pixel_contrast = PixelContrastiveLoss(
         temperature=config["CONTRASTIVE_TEMP"],
         max_samples=config["CONTRASTIVE_MAX_SAMPLES"],
         ignore_index=config["IGNORE_INDEX"]
     ).to(device)
 
-    # Usa la classe FocalTverskyLoss corretta che hai definito
+    # Aggiungiamo la Lovasz
+    # criterion_lovasz = LovaszLoss(mode='multiclass',ignore_index=config["IGNORE_INDEX"]).to(device)
+
     criterion_ft  = FocalTverskyLoss(
                     alpha=0.9, beta=0.1, gamma=3.0,
-                    class_weights=class_weights, # Passiamo i pesi qui
+                    class_weights=None,
                     ignore_index=config["IGNORE_INDEX"]
                 ).to(device)
 
     criterion_wce = nn.CrossEntropyLoss(weight=class_weights,ignore_index=config["IGNORE_INDEX"]).to(device)
 
+    def combined_loss(pred, target, feats=None):
+        return 0.8 * criterion_ft(pred, target) + 0.2 * criterion_wce(pred, target)
+
     best_iou = -1.0; best_conf_matrix = None; global_epoch = 0
 
-    # --- FASE 1: FREEZE ENCODER, TRAIN DECODER --- 
-    tqdm.write("\n--- INIZIO FASE 1: TRAINING DEL DECODER (ENCODER CONGELATO) ---")
-    
-    # Definisci la loss per la Fase 1
-    def loss_phase1(pred, target, feats=None):
-        loss_segmentation = criterion_ft(pred, target)
-        if feats is None: # Per la validazione
-            return loss_segmentation
-        
-        mask_ds = F.interpolate(
-            target.float(),
-            size=feats.shape[2:], mode="nearest"
-         ).squeeze(1).long()
-        # FIX: Usa CONTRASTIVE_W come peso, non TEMP
-        loss_contrast = pixel_contrast(feats, mask_ds) * config["CONTRASTIVE_W"]
-        return loss_segmentation + loss_contrast
+    # --- FASE 1: FREEZE ENCODER, TRAIN DECODER ---
+    # tqdm.write("\n--- INIZIO FASE 1: TRAINING DEL DECODER (ENCODER CONGELATO) ---")
+    # for param in model.encoder.parameters(): param.requires_grad = False
+    # optimizer = optim.AdamW(list(model.decoder.parameters()) + list(model.segmentation_head.parameters()), lr=config["LR_HEAD"], weight_decay=config["WEIGHT_DECAY"])
+    # scheduler = torch.optim.lr_scheduler.OneCycleLR(
+    #     optimizer, max_lr=1e-3, steps_per_epoch=len(train_loader),
+    #     epochs=config["UNFREEZE_EPOCHS"], pct_start=0.1, div_factor=10, final_div_factor=1e3
+    # )
 
-    for param in model.encoder.parameters(): param.requires_grad = False
-    optimizer = optim.AdamW(list(model.decoder.parameters()) + list(model.segmentation_head.parameters()), lr=config["LR_HEAD"], weight_decay=config["WEIGHT_DECAY"])
-    scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=config["LR_HEAD"], steps_per_epoch=len(train_loader), epochs=config["FREEZE_EPOCHS"], pct_start=0.1)
-    optimizer.zero_grad(set_to_none=True)
-    optimizer.step()    # passo fittizio: non influenza i pesi (grad=0)
-    scheduler.step()    # ora il ciclo parte all’LR corretto
+    # for epoch in range(config["FREEZE_EPOCHS"]):
+    #     global_epoch += 1; tqdm.write(f"\n--- Fase 1 / Epoch {epoch+1}/{config['FREEZE_EPOCHS']} (Global: {global_epoch}) ---")
+    #     train_loss = train_one_epoch(
+    #         model=model, loader=train_loader, optimizer=optimizer, scheduler=scheduler, loss_function=combined_loss, 
+    #         scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["FREEZE_EPOCHS"]
+    #     )
+    #     val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config)
+    #     # scheduler.step(val_miou)
+    #     tqdm.write(f"Risultati Epoch {global_epoch}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f}")
+    #     if val_miou > best_iou:
+    #         best_iou, best_conf_matrix = val_miou, val_conf_matrix
+    #         torch.save({'model_state_dict': model.state_dict(), 'config': config}, config["MODEL_SAVE_PATH"])
+    #         tqdm.write(f"\n>>> 🎉 Nuovo modello migliore salvato! mIoU: {best_iou:.4f} <<<")
 
-    # FIX: De-commentato il loop della Fase 1
-    for epoch in range(config["FREEZE_EPOCHS"]):
-        global_epoch += 1; tqdm.write(f"\n--- Fase 1 / Epoch {epoch+1}/{config['FREEZE_EPOCHS']} (Global: {global_epoch}) ---")
-        # FIX: Corretto errore di sintassi (virgola mancante) e aggiunto need_feats=True
-        # Esempio di chiamata in Fase 1 (e successive)
-        train_loss = train_one_epoch(
-            model=model, loader=train_loader, optimizer=optimizer, scheduler=scheduler, 
-            loss_function=loss_phase1, scaler=scaler, device=device, use_amp=use_amp, 
-            current_epoch=epoch, total_epochs=config["FREEZE_EPOCHS"], 
-            gpu_augmentations=gpu_augmentations_freeze, need_feats=True,
-            clip_grad_norm=1.0, mean=config["MEAN"], std=config["STD"]
-        )
-        # FIX: Usa una loss di validazione che non richiede 'feats'
-        val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, criterion_ft, device, config)
-        
-        tqdm.write(f"Risultati Epoch {global_epoch}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f}")
-        if val_miou > best_iou:
-            best_iou, best_conf_matrix = val_miou, val_conf_matrix
-            torch.save({'model_state_dict': model.state_dict(), 'config': config}, config["MODEL_SAVE_PATH"])
-            tqdm.write(f"\n>>> 🎉 Nuovo modello migliore salvato! mIoU: {best_iou:.4f} <<<")
-
-    # --- FASE 2: UNFREEZE ALL, FINE-TUNE ---
+    # # --- FASE 2: UNFREEZE ALL, FINE-TUNE ---
     tqdm.write("\n--- INIZIO FASE 2: FINE-TUNING DELL'INTERA RETE (ENCODER SCONGELATO) ---")
+    train_loader.dataset.transform = get_train_transforms(config, aggressive_p=0.5)
 
     for param in model.encoder.parameters(): param.requires_grad = True
-    optimizer = optim.AdamW(model.parameters(), lr=config["LR_FULL"], weight_decay=config["WEIGHT_DECAY"])
-    scheduler_plateau = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5, cooldown=1, min_lr=1e-7)
+    optimizer = optim.AdamW(model.parameters(), lr=config["LR_FULL"]) #, weight_decay=config["WEIGHT_DECAY"])
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5, cooldown=1, min_lr=1e-7)
             
-    def loss_phase2(pred, target, feats=None):
-        return 0.8 * criterion_ft(pred, target) + 0.2 * criterion_wce(pred, target)
 
     for epoch in range(config["UNFREEZE_EPOCHS"]):
         global_epoch += 1; tqdm.write(f"\n--- Fase 2 / Epoch {epoch+1}/{config['UNFREEZE_EPOCHS']} (Global: {global_epoch}) ---")
+        
         train_loss = train_one_epoch(
-            model=model, loader=train_loader, optimizer=optimizer, scheduler=None, loss_function=loss_phase2, 
-            scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["UNFREEZE_EPOCHS"], 
-            gpu_augmentations=gpu_augmentations_unfreeze, need_feats=False, clip_grad_norm=1.0, mean=config["MEAN"], std=config["STD"]
+            model=model, loader=train_loader, optimizer=optimizer, scheduler=None, loss_function=combined_loss, 
+            scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["UNFREEZE_EPOCHS"]
         )
-        val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, loss_phase2, device, config)
-        scheduler_plateau.step(val_miou)
-        tqdm.write(f"Risultati Epoch {global_epoch}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f} | LR: {optimizer.param_groups[0]['lr']:.2e}")
+        val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config)
+        scheduler.step(val_miou)
+        tqdm.write(f"Risultati Epoch {global_epoch}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f}")
         for i, iou in enumerate(val_iou_per_class):
             if i != config["IGNORE_INDEX"]: tqdm.write(f"    - Classe {i} ({config['CLASS_NAMES'][i]}): {iou:.4f}")
         if val_miou > best_iou:
             best_iou, best_conf_matrix = val_miou, val_conf_matrix
             torch.save({'model_state_dict': model.state_dict(), 'config': config}, config["MODEL_SAVE_PATH"])
             tqdm.write(f"\n>>> 🎉 Nuovo modello migliore salvato! mIoU: {best_iou:.4f} <<<")
+
     
-    # --- FASE 3: FINE-TUNING FINALE CON LOVASZ ---
-    tqdm.write("\n--- INIZIO FASE 3: FINE-TUNING FINALE (LOVASZ LOSS) ---")
+    # --- FASE 3: FINE-TUNING FINALE ---
+    tqdm.write("\n--- INIZIO FASE 3: FINE-TUNING FINALE ---")
     
-    def loss_phase3(pred, target, feats=None):
-        # Lovasz lavora meglio su probabilità, quindi applichiamo Softmax
-        # La lovasz_softmax interna applica già il log-softmax, quindi passiamo i logits
-        loss_lovasz = lovasz_softmax(pred, target, ignore=config["IGNORE_INDEX"])
-        return 0.2 * criterion_ft(pred, target) + 0.8 * loss_lovasz
+    def combined_loss(pred, target, feats=None):
+        return 0.2 * criterion_ft(pred, target) + 0.8 * lovasz_softmax(F.softmax(pred, dim=1), target, ignore=config["IGNORE_INDEX"]) 
+
 
     for epoch in range(config["FINE_TUNING_EPOCHS"]):
         global_epoch += 1; tqdm.write(f"\n--- Fase 3 / Epoch {epoch+1}/{config['FINE_TUNING_EPOCHS']} (Global: {global_epoch}) ---")
+        
         train_loss = train_one_epoch(
-            model=model, loader=train_loader, optimizer=optimizer, scheduler=None, loss_function=loss_phase3, 
-            scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["FINE_TUNING_EPOCHS"], 
-            gpu_augmentations=gpu_augmentations_unfreeze, need_feats=False, clip_grad_norm=1.0, mean=config["MEAN"], std=config["STD"]
+            model=model, loader=train_loader, optimizer=optimizer, scheduler=None, loss_function=combined_loss, 
+            scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["FINE_TUNING_EPOCHS"]
         )
-        val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, loss_phase3, device, config)
-        scheduler_plateau.step(val_miou)
-        tqdm.write(f"Risultati Epoch {global_epoch}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f} | LR: {optimizer.param_groups[0]['lr']:.2e}")
+        val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config)
+        scheduler.step(val_miou)
+        tqdm.write(f"Risultati Epoch {global_epoch}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f}")
         for i, iou in enumerate(val_iou_per_class):
             if i != config["IGNORE_INDEX"]: tqdm.write(f"    - Classe {i} ({config['CLASS_NAMES'][i]}): {iou:.4f}")
         if val_miou > best_iou:
@@ -743,7 +697,6 @@ def main():
     tqdm.write("\n--- Training Completato ---")
     tqdm.write(f"Miglior mIoU di validazione ottenuto: {best_iou:.4f}")
     if best_conf_matrix is not None: plot_confusion_matrix(best_conf_matrix, config["CLASS_NAMES"], config["IGNORE_INDEX"])
-
 
 # =============================================================================
 # 7. ESECUZIONE
