@@ -44,7 +44,7 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 import matplotlib.pyplot as plt
 import seaborn as sns
-from lovasz import lovasz_softmax
+from lovesz import lovasz_softmax
 
 # =============================================================================
 # 2. RIPRODUCIBILITÀ
