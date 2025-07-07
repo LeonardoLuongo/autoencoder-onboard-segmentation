@@ -612,8 +612,8 @@ def main():
         ).to(cfg["DEVICE"])
 
 
-    gpu_augmentations_freeze = build_gpu_augs(config, aggressive_p=0.1)
-    gpu_augmentations_unfreeze = build_gpu_augs(config, aggressive_p=0.5)
+    gpu_augmentations_freeze = build_gpu_augs(config, p=0.1)
+    gpu_augmentations_unfreeze = build_gpu_augs(config, p=0.5)
 
     train_dataset = SegmentationDataset(train_dirs, cpu_transforms, config)
     val_dataset = SegmentationDataset(val_dirs, val_transforms, config)
