@@ -45,6 +45,10 @@ from albumentations.pytorch import ToTensorV2
 import matplotlib.pyplot as plt
 import seaborn as sns
 from lovasz import lovasz_softmax
+import kornia.augmentation as K
+import kornia.geometry.transform as KGT
+from kornia.utils import image_to_tensor
+import torch
 
 # =============================================================================
 # 2. RIPRODUCIBILITÀ
@@ -168,9 +172,16 @@ def load_or_compute_preprocessing(config: dict) -> dict:
 
     # ------------- 3) se arrivi qui devi calcolare ex-novo ------------------ #
     print("Calcolo mean/std, split, pesi classi … (prima e unica volta)")
-    mean, std = calculate_mean_std(  # già presente nel tuo script
+    
+    # Usa la pipeline Kornia minimale
+    cpu_transforms_kornia = get_cpu_transforms_kornia(config)
+    
+    # Il dataset ora usa la pipeline Kornia
+    stats_dataset = SegmentationDataset(all_sample_dirs, cpu_transforms_kornia, config)
+    
+    mean, std = calculate_mean_std(
         DataLoader(
-            SegmentationDataset(all_sample_dirs, get_cpu_transforms(config), config),
+            stats_dataset,
             batch_size=config["BATCH_SIZE"] * 2,
             shuffle=False,
             num_workers=config["NUM_WORKERS_TRAIN"],
@@ -179,7 +190,7 @@ def load_or_compute_preprocessing(config: dict) -> dict:
 
     train_dirs, val_dirs = get_grouped_stratified_split(config)
     class_weights = calculate_class_weights(
-        SegmentationDataset(train_dirs, get_cpu_transforms(config), config),
+        SegmentationDataset(train_dirs, get_cpu_transforms_kornia(config), config),
         config
     )
 
@@ -270,19 +281,116 @@ def get_val_transforms(output_size: Tuple[int, int], mean: float, std: float) ->
         ToTensorV2(),
     ])
 
-# La classe Dataset ora accetta una pipeline di transform specifica
+
+
+
+
+
+def get_train_transforms_kornia(config: Dict[str, Any], aggressive_p: float = 0.5) -> torch.nn.Sequential:
+    """Pipeline di augmentation Kornia AGGRESSIVA."""
+    output_size = config["OUTPUT_SIZE"]
+    mean, std = config["MEAN"], config["STD"]
+    
+    return K.AugmentationSequential(
+        # Trasformazioni geometriche
+        K.RandomHorizontalFlip(p=0.5),
+        K.RandomVerticalFlip(p=aggressive_p / 2),
+        K.RandomRotation(degrees=180, p=aggressive_p),
+        
+        # Trasformazioni di colore (applicate solo all'immagine)
+        K.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.7),
+        K.RandomGaussianBlur(kernel_size=(3, 5), sigma=(0.1, 2.0), p=0.4),
+        
+        # Trasformazione geometrica finale
+        K.Resize(size=(output_size[0], output_size[1])),
+        
+        # Normalizzazione (applicata solo all'immagine)
+        K.Normalize(mean=torch.tensor(mean), std=torch.tensor(std)),
+
+        data_keys=['input', 'mask'],
+        # ==================== LA CORREZIONE FONDAMENTALE È QUI ====================
+        # Specifica l'interpolazione per TUTTE le trasformazioni geometriche 
+        # quando operano sulla maschera. Questo risolve l'errore 'resample_method'.
+        extra_args={
+            K.RandomHorizontalFlip: {"interpolation": "nearest", "align_corners": None},
+            K.RandomVerticalFlip: {"interpolation": "nearest", "align_corners": None},
+            K.RandomRotation: {"interpolation": "nearest", "align_corners": None},
+            K.Resize: {"interpolation": "nearest", "align_corners": None}
+        },
+        same_on_batch=False
+    )
+
+def get_val_transforms_kornia(config: Dict[str, Any]) -> torch.nn.Sequential:
+    """Pipeline di validazione Kornia (solo preprocessing)."""
+    output_size = config["OUTPUT_SIZE"]
+    mean, std = config["MEAN"], config["STD"]
+    
+    return K.AugmentationSequential(
+        K.Resize(size=(output_size[0], output_size[1])),
+        K.Normalize(mean=torch.tensor(mean), std=torch.tensor(std)),
+        
+        data_keys=['input', 'mask'],
+        extra_args={
+            K.Resize: {"interpolation": "nearest", "align_corners": None}
+        },
+        same_on_batch=False
+    )
+
+def get_cpu_transforms_kornia(config: Dict[str, Any]) -> torch.nn.Sequential:
+    """Pipeline Kornia minimale per il calcolo delle statistiche (solo resize)."""
+    output_size = config["OUTPUT_SIZE"]
+
+    return K.AugmentationSequential(
+        K.Resize(size=(output_size[0], output_size[1])),
+        
+        data_keys=['input', 'mask'],
+        extra_args={
+            K.Resize: {"interpolation": "nearest", "align_corners": None}
+        },
+        same_on_batch=False
+    )
+
+
+
+
+# SOSTITUZIONE DEFINITIVA
 class SegmentationDataset(Dataset):
-    def __init__(self, sample_dirs: List[str], transform: A.Compose, config: Dict[str, Any]):
-        self.sample_dirs, self.transform, self.config = sample_dirs, transform, config
-    def __len__(self) -> int: return len(self.sample_dirs)
+    def __init__(self, sample_dirs: List[str], transform: nn.Module, config: Dict[str, Any]):
+        self.sample_dirs = sample_dirs
+        self.transform = transform
+        self.config = config
+
+    def __len__(self) -> int:
+        return len(self.sample_dirs)
+
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         sample_dir = self.sample_dirs[idx]
-        image = np.array(Image.open(os.path.join(sample_dir, 'rgb.jpg')).convert("RGB"))
-        mask = np.array(Image.open(os.path.join(sample_dir, 'labels.png')))
-        assert mask.dtype == np.uint8, f"Tipo maschera non corretto: {mask.dtype}"
-        assert mask.max() < self.config["NUM_CLASSES"], f"ID classe non valido in {os.path.join(sample_dir, 'labels.png')}"
-        augmented = self.transform(image=image, mask=mask)
-        return augmented['image'], augmented['mask']
+        
+        image_np = np.array(Image.open(os.path.join(sample_dir, 'rgb.jpg')).convert("RGB"))
+        mask_np = np.array(Image.open(os.path.join(sample_dir, 'labels.png')))
+        
+        assert mask_np.dtype == np.uint8, f"Tipo maschera non corretto: {mask_np.dtype}"
+        assert mask_np.max() < self.config["NUM_CLASSES"], f"ID classe non valido in {os.path.join(sample_dir, 'labels.png')}"
+
+        # Immagine a tensore (C, H, W), float [0, 1]
+        image_tensor = image_to_tensor(image_np).float() / 255.0
+        
+        # Maschera a tensore (H, W), long
+        mask_tensor = torch.from_numpy(mask_np.copy()).long()
+
+        # Applica le trasformazioni Kornia.
+        # Input: immagine (C,H,W), maschera (H,W)
+        # Output di Kornia: immagine (1,C,H,W), maschera (1,1,H,W)
+        aug_image, aug_mask = self.transform(image_tensor, mask_tensor)
+        
+        # --- LA CORREZIONE È QUI ---
+        # Rimuovi la dimensione batch dall'immagine e TUTTE le dimensioni
+        # singleton (batch E canale) dalla maschera.
+        # L'output deve essere (C, H, W) per l'immagine e (H, W) per la maschera.
+        return aug_image.squeeze(0), aug_mask.squeeze()
+    
+
+
 
 def get_grouped_stratified_split(config: Dict[str, Any]) -> Tuple[List[str], List[str]]:
     # ... (Codice invariato, già ottimizzato e corretto) ...
@@ -578,8 +686,8 @@ def main():
 
     # train_dirs, val_dirs = get_grouped_stratified_split(config)
     # Pipeline di augmentation diverse per training e validazione
-    train_transforms = get_train_transforms(config, aggressive_p=0.1) 
-    val_transforms = get_val_transforms(config["OUTPUT_SIZE"], config["MEAN"], config["STD"])
+    train_transforms = get_train_transforms_kornia(config, aggressive_p=0.1) 
+    val_transforms = get_val_transforms_kornia(config)
     
     train_dataset = SegmentationDataset(train_dirs, train_transforms, config)
     val_dataset = SegmentationDataset(val_dirs, val_transforms, config)
@@ -645,7 +753,7 @@ def main():
 
     # # --- FASE 2: UNFREEZE ALL, FINE-TUNE ---
     tqdm.write("\n--- INIZIO FASE 2: FINE-TUNING DELL'INTERA RETE (ENCODER SCONGELATO) ---")
-    train_loader.dataset.transform = get_train_transforms(config, aggressive_p=0.5)
+    train_loader.dataset.transform = get_train_transforms_kornia(config, aggressive_p=0.5) 
 
     for param in model.encoder.parameters(): param.requires_grad = True
     optimizer = optim.AdamW(model.parameters(), lr=config["LR_FULL"]) #, weight_decay=config["WEIGHT_DECAY"])
@@ -704,3 +812,125 @@ def main():
 if __name__ == "__main__":
     main()
 
+
+
+'''
+& "C:/Program Files/Python312/python.exe" d:/MLPoject-Git/autoencoder-onboard-segmentation/local_execution/Leo/old/test.py
+Device in uso: cuda
+Modello, loss, optimizer e pipeline Kornia creati.
+Immagine caricata, shape iniziale: torch.Size([3, 544, 1024])
+Maschera caricata, shape iniziale: torch.Size([544, 1024])
+
+--- INIZIO TRAINING (1 STEP) ---
+Traceback (most recent call last):
+  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\Leo\old\test.py", line 116, in <module>
+    loss = criterion(outputs, aug_mask.long()) # La maschera deve essere Long
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\nn\modules\module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\nn\modules\module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\nn\modules\loss.py", line 1297, in forward
+    return F.cross_entropy(
+           ^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\nn\functional.py", line 3494, in cross_entropy
+    return torch._C._nn.cross_entropy_loss(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: only batches of spatial targets supported (3D tensors) but got targets of size: : [1, 1, 384, 768]
+PS D:\MLPoject-Git\autoencoder-onboard-segmentation> & "C:/Program Files/Python312/python.exe" d:/MLPoject-Git/autoencoder-onboard-segmentation/local_execution/Leo/old/test.py
+Device in uso: cuda
+Modello, loss, optimizer e pipeline Kornia creati.
+Immagine caricata, shape iniziale: torch.Size([3, 544, 1024])
+Maschera caricata, shape iniziale: torch.Size([544, 1024])
+
+--- INIZIO TRAINING (1 STEP) ---
+Traceback (most recent call last):
+  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\Leo\old\test.py", line 116, in <module>
+    loss = criterion(outputs, aug_mask.long()) # La maschera deve essere Long
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\nn\modules\module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\nn\modules\module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\nn\modules\loss.py", line 1297, in forward
+    return F.cross_entropy(
+           ^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\nn\functional.py", line 3494, in cross_entropy
+    return torch._C._nn.cross_entropy_loss(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: only batches of spatial targets supported (3D tensors) but got targets of size: : [1, 1, 384, 768]
+PS D:\MLPoject-Git\autoencoder-onboard-segmentation> & "C:/Program Files/Python312/python.exe" "d:/MLPoject-Git/autoencoder-onboard-segmentation/local_execution/Leo/old/7 - All_in_1.py"
+Cache trovata e valida — salto il preprocessing.
+Device: cuda | Mixed Precision: True
+Strategia Finale: efficientnet-b3 con Augmentation Mirata
+Creazione del modello: U-Net con encoder 'efficientnet-b3'
+Parametri addestrabili: 13,160,193
+
+--- INIZIO FASE 2: FINE-TUNING DELL'INTERA RETE (ENCODER SCONGELATO) ---
+
+--- Fase 2 / Epoch 1/23 (Global: 1) ---
+Traceback (most recent call last):                                                                                                                                 
+  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\Leo\old\7 - All_in_1.py", line 813, in <module>
+    main()
+  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\Leo\old\7 - All_in_1.py", line 766, in main
+    train_loss = train_one_epoch(
+                 ^^^^^^^^^^^^^^^^
+  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\Leo\old\7 - All_in_1.py", line 481, in train_one_epoch
+    for step, (images, masks) in enumerate(progress_bar):
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\tqdm\std.py", line 1181, in __iter__
+    for obj in iterable:
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\dataloader.py", line 733, in __next__
+    data = self._next_data()
+           ^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\dataloader.py", line 1515, in _next_data
+    return self._process_data(data, worker_id)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\dataloader.py", line 1550, in _process_data
+    data.reraise()
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\_utils.py", line 750, in reraise
+    raise exception
+UnboundLocalError: Caught UnboundLocalError in DataLoader worker process 0.
+Original Traceback (most recent call last):
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\_utils\worker.py", line 349, in _worker_loop
+    data = fetcher.fetch(index)  # type: ignore[possibly-undefined]
+           ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\_utils\fetch.py", line 52, in fetch
+    data = [self.dataset[idx] for idx in possibly_batched_index]
+            ~~~~~~~~~~~~^^^^^
+  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\Leo\old\7 - All_in_1.py", line 384, in __getitem__
+    aug_image, aug_mask = self.transform(image_tensor, mask_tensor)
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\kornia\augmentation\container\augment.py", line 516, in __call__
+    _output_image = decorated_forward(*inputs, **kwargs)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\kornia\core\module.py", line 81, in wrapper
+    tensor_outputs = func(*args, **kwargs)
+                     ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\nn\modules\module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\nn\modules\module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\kornia\augmentation\container\augment.py", line 465, in forward
+    outputs = self.transform_op.transform(  # type: ignore
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\kornia\augmentation\container\ops.py", line 155, in transform
+    outputs.append(op.transform(inp, module, param=param, extra_args=extra_arg))
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\kornia\augmentation\container\ops.py", line 282, in transform
+    input = module.transform_masks(
+            ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\kornia\augmentation\base.py", line 362, in transform_masks
+    output = self.apply_transform_mask(in_tensor, params, flags, transform=transform)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\kornia\augmentation\_2d\geometric\base.py", line 93, in apply_transform_mask
+    if resample_method is not None:
+       ^^^^^^^^^^^^^^^
+UnboundLocalError: cannot access local variable 'resample_method' where it is not associated with a value
+
+'''
