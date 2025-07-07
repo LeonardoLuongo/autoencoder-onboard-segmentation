@@ -44,6 +44,7 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 import matplotlib.pyplot as plt
 import seaborn as sns
+from lovasz import lovasz_softmax
 
 # =============================================================================
 # 2. RIPRODUCIBILITÀ
@@ -65,15 +66,15 @@ def get_config() -> Dict[str, Any]:
     config = {
         "DEVICE": torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
         "RANDOM_SEED": 42, "NUM_WORKERS_TRAIN": 2, "NUM_WORKERS_VAL": 2, "USE_AMP": True,
-        "PERSISTENT_WORKERS": True, "RARE_CLASS_INDICES": [4], "RARE_BOOST_FACTOR": 15.0,
+        "PERSISTENT_WORKERS": True, "RARE_CLASS_INDICES": [4, 6], "RARE_BOOST_FACTOR": 25.0,
         
         "DATASET_PATH_TRAIN": os.path.join(base_path, "dataset/training/train"),
         "DATASET_PATH_AUG": os.path.join(base_path, "dataset/training/augmented"),
         "DATASET_PATH_AUG_AGGR": os.path.join(base_path, "dataset/training/augmented_aggressive"),
-        "MODEL_SAVE_PATH": os.path.join(base_path, "best_model_b5_aggressive_aug.pth"),
+        "MODEL_SAVE_PATH": os.path.join(base_path, "best_model_b3.pth"),
 
-        "ENCODER": "efficientnet-b5", "ENCODER_WEIGHTS": "imagenet",
-        "OUTPUT_SIZE": (384, 768), "BATCH_SIZE": 4, 
+        "ENCODER": "efficientnet-b3", "ENCODER_WEIGHTS": "imagenet",
+        "OUTPUT_SIZE": (384, 768), "BATCH_SIZE": 8, 
         "NUM_CLASSES": 9, "IGNORE_INDEX": 0, "VALIDATION_SPLIT": 0.2,
 
         "FREEZE_EPOCHS": 7, "UNFREEZE_EPOCHS": 23,
@@ -166,7 +167,7 @@ def calculate_mean_std(loader: DataLoader) -> Tuple[np.ndarray, np.ndarray]:
     
     return mean_np, std_np
 
-def get_train_transforms(config: Dict[str, Any]) -> A.Compose:
+def get_train_transforms(config: Dict[str, Any], aggressive_p: float = 0.5) -> A.Compose:
     """Pipeline di augmentation AGGRESSIVA per risolvere le confusioni specifiche."""
     
     output_size = config["OUTPUT_SIZE"]
@@ -174,8 +175,8 @@ def get_train_transforms(config: Dict[str, Any]) -> A.Compose:
     mean, std = config["MEAN"], config["STD"]
     return A.Compose([
         A.HorizontalFlip(p=0.5),
-        A.VerticalFlip(p=0.5),
-        A.RandomRotate90(p=0.7),
+        A.VerticalFlip(p=aggressive_p/2),
+        A.RandomRotate90(p=aggressive_p),
         A.RandomBrightnessContrast(p=0.7),
         A.RandomGamma(p=0.7),
         A.ColorJitter(p=0.7),
@@ -269,7 +270,7 @@ def calculate_class_weights(dataset: Dataset, config: Dict[str, Any]) -> torch.T
     for idx in config["RARE_CLASS_INDICES"]:
         weights[idx] *= config["RARE_BOOST_FACTOR"]
         
-    weights = np.clip(weights, a_min=None, a_max=10.0)   # clamp prima
+    weights = np.clip(weights, a_min=None, a_max=30.0)   # clamp prima
     weights_tensor = torch.tensor(weights, dtype=torch.float).to(config["DEVICE"])
     
     print("\nPesi calcolati per la loss (con boost per classi rare):")
@@ -490,6 +491,19 @@ class FocalTverskyLoss(nn.Module):
 
         return loss.mean()
 
+# =============================================================================
+# LovaszSoftmax Loss
+# =============================================================================
+
+
+class LovaszLoss(nn.Module):
+    def __init__(self, ignore_index=0):
+        super().__init__()
+        self.ignore_index = ignore_index
+    def forward(self, logits, targets):
+        # Lovasz-softmax richiede le probabilità, non i logits
+        probas = F.softmax(logits, dim=1)
+        return lovasz_softmax(probas, targets, ignore=self.ignore_index)
 
 # =============================================================================
 # 6. FUNZIONE PRINCIPALE (CON AUGMENTATION AGGRESSIVA)
@@ -501,7 +515,7 @@ def main():
 
     train_dirs, val_dirs = get_grouped_stratified_split(config)
     # Pipeline di augmentation diverse per training e validazione
-    train_transforms = get_train_transforms(config)
+    train_transforms = get_train_transforms(config, aggressive_p=0.1) 
     val_transforms = get_val_transforms(config["OUTPUT_SIZE"], config["MEAN"], config["STD"])
     
     train_dataset = SegmentationDataset(train_dirs, train_transforms, config)
@@ -516,15 +530,18 @@ def main():
     # Calcola i pesi per la loss sul training set (la funzione va definita sopra)
     class_weights = calculate_class_weights(train_dataset, config)
 
-    criterion_tversky = TverskyLoss(mode='multiclass', alpha=0.7, beta=0.3).to(device)
-    criterion_ce = nn.CrossEntropyLoss(weight=class_weights, ignore_index=config["IGNORE_INDEX"])
-    criterion_focal = FocalLoss(mode='multiclass', gamma=2.0).to(device)
-    # 
+    # criterion_tversky = TverskyLoss(mode='multiclass', alpha=0.7, beta=0.3).to(device)
+    # criterion_ce = nn.CrossEntropyLoss(weight=class_weights, ignore_index=config["IGNORE_INDEX"])
+    # criterion_focal = FocalLoss(mode='multiclass', gamma=2.0).to(device)
+    
     pixel_contrast = PixelContrastiveLoss(
         temperature=config["CONTRASTIVE_TEMP"],
         max_samples=config["CONTRASTIVE_MAX_SAMPLES"],
         ignore_index=config["IGNORE_INDEX"]
     ).to(device)
+
+    # Aggiungiamo la Lovasz
+    criterion_lovasz = LovaszLoss(ignore_index=config["IGNORE_INDEX"]).to(device)
 
     criterion_ft  = FocalTverskyLoss(
                     alpha=0.9, beta=0.1, gamma=3.0,
@@ -532,13 +549,13 @@ def main():
                     ignore_index=config["IGNORE_INDEX"]
                 ).to(device)
 
-    criterion_wce = nn.CrossEntropyLoss(
-                        weight=class_weights,
-                        ignore_index=config["IGNORE_INDEX"]
-                    ).to(device)
+    # criterion_wce = nn.CrossEntropyLoss(
+    #                     weight=class_weights,
+    #                     ignore_index=config["IGNORE_INDEX"]
+    #                 ).to(device)
 
     def combined_loss(pred, target):
-        return 0.8 * criterion_ft(pred, target) + 0.2 * criterion_wce(pred, target) 
+        return 0.4 * criterion_ft(pred, target) + 0.6 * criterion_lovasz(pred, target) 
 
     best_iou = -1.0; best_conf_matrix = None; global_epoch = 0
 
@@ -568,9 +585,14 @@ def main():
 
     # # --- FASE 2: UNFREEZE ALL, FINE-TUNE ---
     tqdm.write("\n--- INIZIO FASE 2: FINE-TUNING DELL'INTERA RETE (ENCODER SCONGELATO) ---")
-    # for param in model.encoder.parameters(): param.requires_grad = True
+    train_transforms = get_train_transforms(config, aggressive_p=0.5) 
+    train_dataset = SegmentationDataset(train_dirs, train_transforms, config)
+    train_loader = DataLoader(train_dataset, batch_size=config["BATCH_SIZE"], shuffle=True, num_workers=config["NUM_WORKERS_TRAIN"], pin_memory=pin_mem, persistent_workers=config["PERSISTENT_WORKERS"])
+
+    for param in model.encoder.parameters(): param.requires_grad = True
     optimizer = optim.AdamW(model.parameters(), lr=config["LR_FULL"]) #, weight_decay=config["WEIGHT_DECAY"])
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5, cooldown=1, min_lr=1e-7)
+    
 
     for epoch in range(config["UNFREEZE_EPOCHS"]):
         global_epoch += 1; tqdm.write(f"\n--- Fase 2 / Epoch {epoch+1}/{config['UNFREEZE_EPOCHS']} (Global: {global_epoch}) ---")
