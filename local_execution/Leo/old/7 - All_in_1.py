@@ -635,7 +635,7 @@ def main():
 
     best_iou = -1.0; best_conf_matrix = None; global_epoch = 0
 
-    # --- FASE 1: FREEZE ENCODER, TRAIN DECODER ---
+    # --- FASE 1: FREEZE ENCODER, TRAIN DECODER --- 
     tqdm.write("\n--- INIZIO FASE 1: TRAINING DEL DECODER (ENCODER CONGELATO) ---")
     
     # Definisci la loss per la Fase 1
