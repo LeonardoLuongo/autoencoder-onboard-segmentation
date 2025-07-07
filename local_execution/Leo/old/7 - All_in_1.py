@@ -45,6 +45,8 @@ from albumentations.pytorch import ToTensorV2
 import matplotlib.pyplot as plt
 import seaborn as sns
 from lovasz import lovasz_softmax
+import kornia.augmentation as K
+import kornia.geometry as G
 
 # =============================================================================
 # 2. RIPRODUCIBILITÀ
@@ -167,36 +169,36 @@ def calculate_mean_std(loader: DataLoader) -> Tuple[np.ndarray, np.ndarray]:
     
     return mean_np, std_np
 
-def get_train_transforms(config: Dict[str, Any], aggressive_p: float = 0.5) -> A.Compose:
-    """Pipeline di augmentation AGGRESSIVA per risolvere le confusioni specifiche."""
-    
-    output_size = config["OUTPUT_SIZE"]
-    # mean, std = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225] # image net
-    mean, std = config["MEAN"], config["STD"]
+def get_cpu_transforms(config: Dict[str, Any]) -> A.Compose:
+    """Pipeline CPU: solo le operazioni leggere e necessarie."""
     return A.Compose([
-        A.HorizontalFlip(p=0.5),
-        A.VerticalFlip(p=aggressive_p/2),
-        A.RandomRotate90(p=aggressive_p),
-        A.RandomBrightnessContrast(p=0.7),
-        A.RandomGamma(p=0.7),
-        A.ColorJitter(p=0.7),
-        A.GaussianBlur(blur_limit=(3, 5), p=0.4),
-        # A.CoarseDropout(
-        #     max_holes=16, 
-        #     min_holes=8,
-        #     max_height=32,
-        #     min_height=16,
-        #     max_width=32, 
-        #     min_width=16,
-        #     p=0.5
-        # ),
+        # Resize è l'unica trasformazione geometrica che teniamo qui
         A.Resize(height=config["OUTPUT_SIZE"][0], width=config["OUTPUT_SIZE"][1]),
-        A.Normalize(mean=mean, std=std),
+        # Normalize e ToTensorV2 devono essere le ultime
+        A.Normalize(mean=config["MEAN"], std=config["STD"]),
         ToTensorV2(),
     ])
 
+def get_gpu_augmentations(config: Dict[str, Any], aggressive_p: float = 0.5) -> nn.Module:
+    """Pipeline GPU: tutte le augmentation pesanti, definite come un modulo nn.Sequential."""
+    # Kornia lavora direttamente su tensori (B, C, H, W)
+    gpu_aug = K.AugmentationSequential(
+        K.RandomHorizontalFlip(p=0.5),
+        K.RandomVerticalFlip(p=aggressive_p / 2),
+        K.RandomRotation(degrees=90, p=aggressive_p),
+        K.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.7),
+        K.RandomGamma(gamma=(0.8, 1.2), p=0.7),
+        K.RandomGaussianBlur(kernel_size=(3, 5), sigma=(0.1, 2.0), p=0.4),
+        # Aggiungiamo il flag per sincronizzare le trasformazioni tra immagine e maschera
+        data_keys=["input", "mask"],
+        return_transform=False, # Non ci serve la matrice di trasformazione indietro
+        same_on_batch=False # Applica una trasformazione diversa a ogni immagine nel batch
+    )
+    return gpu_aug.to(config["DEVICE"])
+
+# La pipeline di validazione rimane su CPU perché non ha augmentation random
 def get_val_transforms(output_size: Tuple[int, int], mean: float, std: float) -> A.Compose:
-    """Pipeline di validazione (solo preprocessing)."""
+    """Pipeline di validazione (solo preprocessing su CPU)."""
     return A.Compose([
         A.Resize(height=output_size[0], width=output_size[1], interpolation=cv2.INTER_NEAREST),
         A.Normalize(mean=mean, std=std),
@@ -301,9 +303,11 @@ def plot_confusion_matrix(conf_matrix_np, class_names, ignore_index, save_path="
     plt.savefig(save_path, dpi=300, bbox_inches='tight'); plt.close(fig)
     tqdm.write(f"Matrice di confusione salvata in '{save_path}'")
 
-def train_one_epoch(model, loader, optimizer, scheduler, loss_function, scaler, device, use_amp, current_epoch, total_epochs, need_feats=False) -> float:
+def train_one_epoch(model, loader, optimizer, scheduler, loss_function, scaler, device, use_amp, current_epoch, total_epochs, gpu_augmentations: nn.Module, need_feats=False, ) -> float:
     model.train(); running_loss = 0.0; progress_bar = tqdm(loader, desc="Training", leave=False)
     for step, (images, masks) in enumerate(progress_bar):
+
+        images, masks = gpu_augmentations(images=images, masks=masks)
         # Applica CutMix con una certa probabilità
         if current_epoch <= total_epochs - 5 and torch.rand(1) < 0.5: # es. 50% di probabilità per batch
             images, masks = cutmix_batch(images, masks, alpha=1.0)
@@ -503,10 +507,16 @@ def main():
 
     train_dirs, val_dirs = get_grouped_stratified_split(config)
     # Pipeline di augmentation diverse per training e validazione
-    train_transforms = get_train_transforms(config, aggressive_p=0.1) 
+    # Crea le pipeline
+    cpu_transforms = get_cpu_transforms(config)
     val_transforms = get_val_transforms(config["OUTPUT_SIZE"], config["MEAN"], config["STD"])
     
-    train_dataset = SegmentationDataset(train_dirs, train_transforms, config)
+    # Le augmentations GPU aggressive per la fase di un-freeze
+    gpu_augmentations_freeze = get_gpu_augmentations(config, aggressive_p=0.1)
+    gpu_augmentations_unfreeze = get_gpu_augmentations(config, aggressive_p=0.5)
+
+    # Il dataset usa solo le trasformazioni CPU
+    train_dataset = SegmentationDataset(train_dirs, cpu_transforms, config)
     val_dataset = SegmentationDataset(val_dirs, val_transforms, config)
     
     pin_mem = device.type == 'cuda'
@@ -567,7 +577,7 @@ def main():
     #     global_epoch += 1; tqdm.write(f"\n--- Fase 1 / Epoch {epoch+1}/{config['FREEZE_EPOCHS']} (Global: {global_epoch}) ---")
     #     train_loss = train_one_epoch(
     #         model=model, loader=train_loader, optimizer=optimizer, scheduler=scheduler, loss_function=combined_loss, 
-    #         scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["FREEZE_EPOCHS"], need_feats=True
+    #         scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["FREEZE_EPOCHS"], gpu_augmentations=gpu_augmentations_freeze need_feats=True
     #     )
     #     val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config)
     #     # scheduler.step(val_miou)
@@ -579,9 +589,6 @@ def main():
 
     # # --- FASE 2: UNFREEZE ALL, FINE-TUNE ---
     tqdm.write("\n--- INIZIO FASE 2: FINE-TUNING DELL'INTERA RETE (ENCODER SCONGELATO) ---")
-    train_transforms = get_train_transforms(config, aggressive_p=0.5) 
-    train_dataset = SegmentationDataset(train_dirs, train_transforms, config)
-    train_loader = DataLoader(train_dataset, batch_size=config["BATCH_SIZE"], shuffle=True, num_workers=config["NUM_WORKERS_TRAIN"], pin_memory=pin_mem, persistent_workers=config["PERSISTENT_WORKERS"])
 
     for param in model.encoder.parameters(): 
         param.requires_grad = True
@@ -596,7 +603,7 @@ def main():
         
         train_loss = train_one_epoch(
             model=model, loader=train_loader, optimizer=optimizer, scheduler=None, loss_function=combined_loss, 
-            scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["UNFREEZE_EPOCHS"]
+            scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["UNFREEZE_EPOCHS"], gpu_augmentations=gpu_augmentations_unfreeze
         )
         val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config)
         scheduler.step(val_miou)
@@ -620,7 +627,7 @@ def main():
         
         train_loss = train_one_epoch(
             model=model, loader=train_loader, optimizer=optimizer, scheduler=None, loss_function=combined_loss, 
-            scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["FINE_TUNING_EPOCHS"]
+            scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["FINE_TUNING_EPOCHS"], gpu_augmentations=gpu_augmentations_unfreeze
         )
         val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config)
         scheduler.step(val_miou)
