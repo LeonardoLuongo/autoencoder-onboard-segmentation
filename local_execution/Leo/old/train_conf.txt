@@ -1,0 +1,3 @@
+efficientnet-b0,
+single phase,
+FocalTverskyLoss.
