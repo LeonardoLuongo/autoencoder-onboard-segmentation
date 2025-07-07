@@ -313,7 +313,11 @@ def train_one_epoch(model, loader, optimizer, scheduler, seg_loss_fn, contrast_l
             outputs = model(images); 
             if contrast_loss_fn is not None:
                 feats = model.encoder(images)[-1]
-                loss = seg_loss_fn(outputs, masks) + contrast_loss_fn(feats, masks) * seg_w
+                mask_ds = F.interpolate(
+                    masks.unsqueeze(1).float(),
+                    size=feats.shape[2:], mode="nearest"
+                ).squeeze(1).long()
+                loss = seg_loss_fn(outputs, masks) + contrast_loss_fn(feats, mask_ds) * seg_w
             else:
                 loss = seg_loss_fn(outputs, masks)
         optimizer.zero_grad(); scaler.scale(loss).backward(); scaler.step(optimizer); scaler.update(); 
