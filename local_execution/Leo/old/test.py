@@ -25,27 +25,31 @@ config = {
     "LR": 1e-4,
 }
 
+
+
+from kornia.constants import DataKey, Resample   # <-- enum Import
+
 def get_transforms_kornia() -> torch.nn.Sequential:
-    """Pipeline di augmentation Kornia. Funziona per training e validazione."""
     return K.AugmentationSequential(
-        # Trasformazioni geometriche
+        # --- trasformazioni ---
         K.RandomHorizontalFlip(p=0.5),
         K.RandomRotation(degrees=15),
-        # Trasformazioni di colore
         K.ColorJitter(brightness=0.2, contrast=0.2, p=0.8),
-        # Resize e Normalizzazione
         K.Resize(size=config["OUTPUT_SIZE"], align_corners=False),
-        K.Normalize(mean=torch.tensor(config["MEAN"]), std=torch.tensor(config["STD"])),
-        
-        # --- LA CORREZIONE DEFINITIVA È QUI ---
-        # Applica le trasformazioni a entrambi, ma sovrascrivi l'interpolazione per la maschera
-        # specificandola direttamente. Questo è il modo più robusto.
-        data_keys=['input', 'mask'],
+        K.Normalize(mean=torch.tensor(config["MEAN"]),
+                    std=torch.tensor(config["STD"])),
+
+        # --- set comuni ---
+        data_keys=["input", "mask"],          # <= vanno bene le stringhe
         extra_args={
-            'mask': {'interpolation': 'nearest', 'align_corners': False}
+            DataKey.MASK: {                   # <= QUI serve l’enum!
+                "resample": Resample.NEAREST,
+                "align_corners": False,
+            }
         },
-        same_on_batch=False
+        same_on_batch=False,
     )
+
 
 # =============================================================================
 # 3. SCRIPT PRINCIPALE
@@ -109,6 +113,8 @@ if __name__ == "__main__":
     # Applica le augmentations
     # L'output sarà un batch di 1 immagine e 1 maschera augmentate
     aug_img, aug_mask = transforms(img_batch, mask_batch)
+    
+    aug_mask = aug_mask.squeeze(1) 
 
     # Step di training
     optimizer.zero_grad()
@@ -127,6 +133,7 @@ if __name__ == "__main__":
         # Per la validazione, usiamo la stessa pipeline per semplicità,
         # ma potremmo crearne una separata senza augmentations casuali.
         val_img, val_mask = transforms(img_batch, mask_batch)
+        val_mask = val_mask.squeeze(1)
         
         outputs = model(val_img)
         val_loss = criterion(outputs, val_mask.long())
@@ -141,25 +148,3 @@ if __name__ == "__main__":
         print(f"Step di validazione completato. Loss: {val_loss.item():.4f}, IoU (semplificato): {iou.item():.4f}")
 
     print("\nSimulazione completata con successo.")
-
-'''
---- INIZIO TRAINING (1 STEP) ---
-Traceback (most recent call last):
-  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\Leo\old\test.py", line 116, in <module>
-    loss = criterion(outputs, aug_mask.long()) # La maschera deve essere Long
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\nn\modules\module.py", line 1751, in _wrapped_call_impl
-    return self._call_impl(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\nn\modules\module.py", line 1762, in _call_impl
-    return forward_call(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\nn\modules\loss.py", line 1297, in forward
-    return F.cross_entropy(
-           ^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\nn\functional.py", line 3494, in cross_entropy
-    return torch._C._nn.cross_entropy_loss(
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-RuntimeError: only batches of spatial targets supported (3D tensors) but got targets of size: : [1, 1, 384, 768]
-
-'''
