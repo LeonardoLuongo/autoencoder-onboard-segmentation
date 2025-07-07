@@ -90,46 +90,77 @@ def get_config() -> Dict[str, Any]:
     # FIX: Nomi delle classi anonimi come da richiesta
     config["CLASS_NAMES"] = ["Ignored"] + [f"Classe {i}" for i in range(1, config["NUM_CLASSES"])]
 
-    # --- CALCOLO CORRETTO DI MEDIA E DEVIAZIONE STANDARD ---
-    tqdm.write("Preparazione per il calcolo delle statistiche del dataset...")
-    
-    # 1. Pipeline di trasformazione SENZA A.Normalize
-    stats_transforms = A.Compose([
-        A.Resize(height=config["OUTPUT_SIZE"][0], width=config["OUTPUT_SIZE"][1]),
-        # ToTensorV2 è fondamentale perché scala le immagini da [0, 255] a [0, 1]
-        A.Normalize(mean=(0.0, 0.0, 0.0), std=(1.0, 1.0, 1.0), max_pixel_value=255.0),
-        ToTensorV2(),
-    ])
-
-    # 2. Crea un Dataset temporaneo usando solo i dati originali
-    train_original_dirs = [d for d in glob.glob(os.path.join(config["DATASET_PATH_TRAIN"], "*")) if os.path.isdir(d)]
-    stats_dataset = SegmentationDataset(
-        sample_dirs=train_original_dirs,
-        transform=stats_transforms,
-        config=config  # Passa la config per l'assert nel dataset
-    )
-
-    # 3. Avvolgi il Dataset in un DataLoader (IL FIX FONDAMENTALE)
-    stats_loader = DataLoader(
-        stats_dataset, 
-        batch_size=config["BATCH_SIZE"] * 2, # Possiamo usare un batch size più grande qui
-        shuffle=False, 
-        num_workers=config["NUM_WORKERS_TRAIN"],
-        persistent_workers=config["PERSISTENT_WORKERS"]
-    )
-    
-    # 4. Ora chiama la funzione con il DataLoader
-    mean, std = calculate_mean_std(stats_loader)
-
-    assert 0.0 <= mean.min() and mean.max() <= 1.0,  "Mean fuori range 0-1"
-    assert 0.0 <  std.min()  and std.max()  <  1.0,  "Std anomala"
-    
-    # 5. Salva i valori calcolati nella configurazione
-    config["MEAN"] = mean
-    config["STD"] = std
 
     tqdm.write("Statistiche personalizzate calcolate e caricate nella configurazione.")
     return config
+
+
+
+import hashlib, json, torch, os, pickle
+
+CACHE_PATH = "./cache/preprocessing_cache.pth"
+os.makedirs(os.path.dirname(CACHE_PATH), exist_ok=True)
+
+def get_dataset_signature(paths: list[str]) -> str:
+    """
+    Crea una stringa‐hash semplice per capire se il dataset è cambiato.
+    Usa nomi file + dimensione + mtime (veloce, niente lettura byte-a-byte).
+    """
+    h = hashlib.sha1()
+    for p in sorted(paths):
+        st = os.stat(p)
+        h.update(f"{p}:{st.st_size}:{int(st.st_mtime)}".encode())
+    return h.hexdigest()
+
+
+def load_or_compute_preprocessing(config: dict) -> dict:
+    """
+    Se esiste la cache e combacia con il dataset attuale => la carico.
+    Altrimenti ricalcolo tutto e salvo.
+    """
+    # ------------- 1) individua tutte le cartelle/immagini grezze ---------- #
+    all_sample_dirs = [d for d in glob.glob(os.path.join(
+        config["DATASET_PATH_TRAIN"], "*")) if os.path.isdir(d)]
+    dataset_sig = get_dataset_signature(all_sample_dirs)
+
+    # ------------- 2) tenta di caricare la cache --------------------------- #
+    if os.path.isfile(CACHE_PATH):
+        cache = torch.load(CACHE_PATH)
+        if cache.get("dataset_version") == dataset_sig:
+            print("Cache trovata e valida — salto il preprocessing.")
+            return cache
+        else:
+            print("Cache trovata ma il dataset è cambiato → ricalcolo.")
+
+    # ------------- 3) se arrivi qui devi calcolare ex-novo ------------------ #
+    print("Calcolo mean/std, split, pesi classi … (prima e unica volta)")
+    mean, std = calculate_mean_std(  # già presente nel tuo script
+        DataLoader(
+            SegmentationDataset(all_sample_dirs, get_cpu_transforms(config), config),
+            batch_size=config["BATCH_SIZE"] * 2,
+            shuffle=False,
+            num_workers=config["NUM_WORKERS_TRAIN"],
+        )
+    )
+
+    train_dirs, val_dirs = get_grouped_stratified_split(config)
+    class_weights = calculate_class_weights(
+        SegmentationDataset(train_dirs, get_cpu_transforms(config), config),
+        config
+    )
+
+    cache = {
+        "dataset_version": dataset_sig,
+        "mean": mean,
+        "std": std,
+        "train_dirs": train_dirs,
+        "val_dirs": val_dirs,
+        "class_weights": class_weights.cpu(),
+    }
+    torch.save(cache, CACHE_PATH)
+    print(f"Cache salvata in {CACHE_PATH}")
+    return cache
+
 
 # =============================================================================
 # 4. DATA AUGMENTATION & GESTIONE DATI
@@ -179,12 +210,12 @@ def get_gpu_augmentations(config: Dict[str, Any], aggressive_p: float = 0.5) -> 
     """Pipeline GPU: tutte le augmentation pesanti, definite come un modulo nn.Sequential."""
     # Kornia lavora direttamente su tensori (B, C, H, W)
     gpu_aug = K.AugmentationSequential(
-        K.RandomHorizontalFlip(p=0.5),
-        K.RandomVerticalFlip(p=aggressive_p / 2),
+        K.RandomHorizontalFlip(p=0.5, align_corners=False),
+        K.RandomVerticalFlip(p=aggressive_p / 2, align_corners=False),
         K.RandomRotation(degrees=90, p=aggressive_p, align_corners=False),
-        K.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.7),
-        K.RandomGamma(gamma=(0.8, 1.2), p=0.7),
-        K.RandomGaussianBlur(kernel_size=(3, 5), sigma=(0.1, 2.0), p=0.4),
+        K.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.7, align_corners=False),
+        K.RandomGamma(gamma=(0.8, 1.2), p=0.7, align_corners=False),
+        K.RandomGaussianBlur(kernel_size=(3, 5), sigma=(0.1, 2.0), p=0.4, align_corners=False),
         # Aggiungiamo il flag per sincronizzare le trasformazioni tra immagine e maschera
         data_keys=["input", "mask"],
         same_on_batch=False # Applica una trasformazione diversa a ogni immagine nel batch
@@ -543,11 +574,19 @@ class FocalTverskyLoss(nn.Module):
 # 6. FUNZIONE PRINCIPALE (CON AUGMENTATION AGGRESSIVA)
 # =============================================================================
 def main():
-    config = get_config(); seed_everything(config["RANDOM_SEED"]); device = config["DEVICE"]
+    config = get_config()
+    cache  = load_or_compute_preprocessing(config)
+
+    # sovrascrivi i campi in config così il resto dello script non cambia
+    config["MEAN"], config["STD"]   = cache["mean"], cache["std"]
+    train_dirs, val_dirs            = cache["train_dirs"], cache["val_dirs"]
+    class_weights                   = cache["class_weights"].to(config["DEVICE"])
+    assert 0.0 <= config["MEAN"].min() and config["MEAN"].max() <= 1.0,  "Mean fuori range 0-1"
+    assert 0.0 <  config["STD"].min()  and config["STD"].max()  <  1.0,  "Std anomala"
+
+    seed_everything(config["RANDOM_SEED"]); device = config["DEVICE"]
     use_amp = config["USE_AMP"] and AMP_AVAILABLE and device.type == 'cuda'
     tqdm.write(f"Device: {device} | Mixed Precision: {use_amp}"); tqdm.write(f"Strategia Finale: {config['ENCODER']} con Augmentation Mirata")
-
-    train_dirs, val_dirs = get_grouped_stratified_split(config)
     
     cpu_transforms = get_cpu_transforms(config)
     val_transforms = get_val_transforms(config["OUTPUT_SIZE"], config["MEAN"], config["STD"])
@@ -555,12 +594,12 @@ def main():
     # FIX: Aggiunto align_corners=False per silenziare l'avviso di Kornia
     def get_gpu_augmentations(config: Dict[str, Any], aggressive_p: float = 0.5) -> nn.Module:
         gpu_aug = K.AugmentationSequential(
-            K.RandomHorizontalFlip(p=0.5),
-            K.RandomVerticalFlip(p=aggressive_p / 2),
+            K.RandomHorizontalFlip(p=0.5, align_corners=False),
+            K.RandomVerticalFlip(p=aggressive_p / 2, align_corners=False),
             K.RandomRotation(degrees=90, p=aggressive_p, align_corners=False), # FIX
-            K.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.7),
-            K.RandomGamma(gamma=(0.8, 1.2), p=0.7),
-            K.RandomGaussianBlur(kernel_size=(3, 5), sigma=(0.1, 2.0), p=0.4),
+            K.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.7, align_corners=False),
+            K.RandomGamma(gamma=(0.8, 1.2), p=0.7, align_corners=False),
+            K.RandomGaussianBlur(kernel_size=(3, 5), sigma=(0.1, 2.0), p=0.4, align_corners=False),
             data_keys=["input", "mask"],
             same_on_batch=False
         )
@@ -578,7 +617,6 @@ def main():
 
     model = get_model(config).to(device)
     scaler = GradScaler(enabled=use_amp)
-    class_weights = calculate_class_weights(train_dataset, config)
 
     pixel_contrast = PixelContrastiveLoss(
         temperature=config["CONTRASTIVE_TEMP"],
