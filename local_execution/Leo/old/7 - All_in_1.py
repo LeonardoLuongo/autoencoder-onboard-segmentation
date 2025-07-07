@@ -77,7 +77,7 @@ def get_config() -> Dict[str, Any]:
         "OUTPUT_SIZE": (384, 768), "BATCH_SIZE": 4, 
         "NUM_CLASSES": 9, "IGNORE_INDEX": 0, "VALIDATION_SPLIT": 0.2,
 
-        "FREEZE_EPOCHS": 7, "UNFREEZE_EPOCHS": 23,
+        "FREEZE_EPOCHS": 7, "UNFREEZE_EPOCHS": 23, "FINE_TUNING_EPOCHS": 10,
         "LR_HEAD": 1e-3, "LR_FULL": 1e-4, "WEIGHT_DECAY": 1e-6,
 
         "CONTRASTIVE_TEMP": 0.1,      # τ dell’InfoNCE
@@ -518,6 +518,7 @@ def main():
     # criterion_tversky = TverskyLoss(mode='multiclass', alpha=0.7, beta=0.3).to(device)
     # criterion_ce = nn.CrossEntropyLoss(weight=class_weights, ignore_index=config["IGNORE_INDEX"])
     # criterion_focal = FocalLoss(mode='multiclass', gamma=2.0).to(device)
+    # criterion_dice = DiceLoss(mode='multiclass', ignore_index=config["IGNORE_INDEX"]).to(device)
     
     pixel_contrast = PixelContrastiveLoss(
         temperature=config["CONTRASTIVE_TEMP"],
@@ -534,37 +535,10 @@ def main():
                     ignore_index=config["IGNORE_INDEX"]
                 ).to(device)
 
-    # criterion_wce = nn.CrossEntropyLoss(
-    #                     weight=class_weights,
-    #                     ignore_index=config["IGNORE_INDEX"]
-    #                 ).to(device)
-    steps = -1
+    criterion_wce = nn.CrossEntropyLoss(weight=class_weights,ignore_index=config["IGNORE_INDEX"]).to(device)
+
     def combined_loss(pred, target, feats=None):
-        nonlocal steps
-        steps = steps + 1
-
-        if feats is not None and steps % 150 == 0:
-            mask_ds = F.interpolate(
-                target.unsqueeze(1).float(),
-                size=feats.shape[2:], mode="nearest"
-            ).squeeze(1).long()
-
-            return 0.4 * criterion_ft(pred, target) \
-            + 0.6 * lovasz_softmax(F.softmax(pred, dim=1), target, ignore=config["IGNORE_INDEX"]) \
-            + pixel_contrast(feats, mask_ds) * config["CONTRASTIVE_W"]
-
-            # mask_ds = F.interpolate(
-            #     masks.unsqueeze(1).float(),
-            #     size=feats.shape[2:], mode="nearest"
-            # ).squeeze(1).long()
-            # if contrast_loss_fn is not None:
-            #     loss = seg_loss_fn(outputs, masks) + contrast_loss_fn(feats, mask_ds) * seg_w
-            # else:
-            #     loss = seg_loss_fn(outputs, masks)
-        elif steps % 50 == 0:
-            return 0.4 * criterion_ft(pred, target) + 0.6 * lovasz_softmax(F.softmax(pred, dim=1), target, ignore=config["IGNORE_INDEX"]) 
-        else:
-            return criterion_ft(pred, target)
+        return 0.8 * criterion_ft(pred, target) + 0.2 * criterion_wce(pred, target)
 
     best_iou = -1.0; best_conf_matrix = None; global_epoch = 0
 
@@ -600,10 +574,35 @@ def main():
     for param in model.encoder.parameters(): param.requires_grad = True
     optimizer = optim.AdamW(model.parameters(), lr=config["LR_FULL"]) #, weight_decay=config["WEIGHT_DECAY"])
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5, cooldown=1, min_lr=1e-7)
-    
+            
 
     for epoch in range(config["UNFREEZE_EPOCHS"]):
         global_epoch += 1; tqdm.write(f"\n--- Fase 2 / Epoch {epoch+1}/{config['UNFREEZE_EPOCHS']} (Global: {global_epoch}) ---")
+        
+        train_loss = train_one_epoch(
+            model=model, loader=train_loader, optimizer=optimizer, scheduler=None, loss_function=combined_loss, 
+            scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["UNFREEZE_EPOCHS"]
+        )
+        val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config)
+        scheduler.step(val_miou)
+        tqdm.write(f"Risultati Epoch {global_epoch}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f}")
+        for i, iou in enumerate(val_iou_per_class):
+            if i != config["IGNORE_INDEX"]: tqdm.write(f"    - Classe {i} ({config['CLASS_NAMES'][i]}): {iou:.4f}")
+        if val_miou > best_iou:
+            best_iou, best_conf_matrix = val_miou, val_conf_matrix
+            torch.save({'model_state_dict': model.state_dict(), 'config': config}, config["MODEL_SAVE_PATH"])
+            tqdm.write(f"\n>>> 🎉 Nuovo modello migliore salvato! mIoU: {best_iou:.4f} <<<")
+
+    
+    # --- FASE 3: FINE-TUNING FINALE ---
+    tqdm.write("\n--- INIZIO FASE 3: FINE-TUNING FINALE ---")
+    
+    def combined_loss(pred, target, feats=None):
+        return 0.2 * criterion_ft(pred, target) + 0.8 * lovasz_softmax(F.softmax(pred, dim=1), target, ignore=config["IGNORE_INDEX"]) 
+
+
+    for epoch in range(config["FINE_TUNING_EPOCHS"]):
+        global_epoch += 1; tqdm.write(f"\n--- Fase 3 / Epoch {epoch+1}/{config['UNFREEZE_EPOCHS']} (Global: {global_epoch}) ---")
         
         train_loss = train_one_epoch(
             model=model, loader=train_loader, optimizer=optimizer, scheduler=None, loss_function=combined_loss, 
