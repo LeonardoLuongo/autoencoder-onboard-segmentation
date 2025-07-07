@@ -342,6 +342,7 @@ def train_one_epoch(model, loader, optimizer, scheduler, loss_function, scaler, 
     
     for step, (images, masks) in enumerate(progress_bar):
         images, raw_masks = gpu_augmentations(images, masks.float())
+        images.clamp_(0., 1.)
         masks_long = raw_masks.long()
 
         if current_epoch <= total_epochs - 5 and torch.rand(1) < 0.5:
@@ -592,23 +593,27 @@ def main():
     
     cpu_transforms = get_cpu_transforms(config)
     val_transforms = get_val_transforms(config["OUTPUT_SIZE"], config["MEAN"], config["STD"])
-    
-    # FIX: Aggiunto align_corners=False per silenziare l'avviso di Kornia
-    def get_gpu_augmentations(config: Dict[str, Any], aggressive_p: float = 0.5) -> nn.Module:
-        gpu_aug = K.AugmentationSequential(
-            K.RandomHorizontalFlip(p=0.5),
-            K.RandomVerticalFlip(p=aggressive_p / 2),
-            K.RandomRotation(degrees=90, p=aggressive_p), # FIX
-            K.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.7),
-            K.RandomGamma(gamma=(0.8, 1.2), p=0.7),
-            K.RandomGaussianBlur(kernel_size=(3, 5), sigma=(0.1, 2.0), p=0.4),
+        
+    def build_gpu_augs(cfg, p=0.5):
+        return K.AugmentationSequential(
+            K.RandomHorizontalFlip(p=0.5,         align_corners=False),
+            K.RandomVerticalFlip( p=p/2,          align_corners=False),
+            K.RandomRotation(     degrees=90,
+                                p=p,            align_corners=False,
+                                resample="bilinear", padding_mode="border"),
+            K.ColorJitter( brightness=0.2, contrast=0.2,
+                        saturation=0.2, hue=0.1,
+                        p=0.7,          align_corners=False),
+            K.RandomGamma(  gamma=(0.8,1.2), p=0.7, align_corners=False),
+            K.RandomGaussianBlur(kernel_size=(3,5), sigma=(0.1,2.0),
+                                p=0.4,      align_corners=False),
             data_keys=["input", "mask"],
             same_on_batch=False
-        )
-        return gpu_aug.to(config["DEVICE"])
+        ).to(cfg["DEVICE"])
 
-    gpu_augmentations_freeze = get_gpu_augmentations(config, aggressive_p=0.1)
-    gpu_augmentations_unfreeze = get_gpu_augmentations(config, aggressive_p=0.5)
+
+    gpu_augmentations_freeze = build_gpu_augs(config, aggressive_p=0.1)
+    gpu_augmentations_unfreeze = build_gpu_augs(config, aggressive_p=0.5)
 
     train_dataset = SegmentationDataset(train_dirs, cpu_transforms, config)
     val_dataset = SegmentationDataset(val_dirs, val_transforms, config)
@@ -657,6 +662,9 @@ def main():
     for param in model.encoder.parameters(): param.requires_grad = False
     optimizer = optim.AdamW(list(model.decoder.parameters()) + list(model.segmentation_head.parameters()), lr=config["LR_HEAD"], weight_decay=config["WEIGHT_DECAY"])
     scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=config["LR_HEAD"], steps_per_epoch=len(train_loader), epochs=config["FREEZE_EPOCHS"], pct_start=0.1)
+    optimizer.zero_grad(set_to_none=True)
+    optimizer.step()    # passo fittizio: non influenza i pesi (grad=0)
+    scheduler.step()    # ora il ciclo parte all’LR corretto
 
     # FIX: De-commentato il loop della Fase 1
     for epoch in range(config["FREEZE_EPOCHS"]):
