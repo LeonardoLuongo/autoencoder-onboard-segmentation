@@ -203,11 +203,12 @@ def calculate_mean_std(loader: DataLoader) -> Tuple[np.ndarray, np.ndarray]:
 
 def get_cpu_transforms(cfg: dict) -> A.Compose:
     tf = [
-        A.Resize(height=cfg["OUTPUT_SIZE"][0], width=cfg["OUTPUT_SIZE"][1]),
-        ToTensorV2(),                      # uint8 → float32, scala 0-1
+        A.Resize(height=cfg["OUTPUT_SIZE"][0], width=cfg["OUTPUT_SIZE"][1])
     ]
     if "MEAN" in cfg and "STD" in cfg:    # ← li aggiunge solo se ci sono
         tf.append(A.Normalize(mean=cfg["MEAN"], std=cfg["STD"]))
+        
+    tf.append(ToTensorV2())
     return A.Compose(tf)
 
 
