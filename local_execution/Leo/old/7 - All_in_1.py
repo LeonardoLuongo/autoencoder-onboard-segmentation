@@ -201,14 +201,15 @@ def calculate_mean_std(loader: DataLoader) -> Tuple[np.ndarray, np.ndarray]:
     
     return mean_np, std_np
 
-def get_cpu_transforms(cfg):
-    return A.Compose([
+def get_cpu_transforms(cfg: dict) -> A.Compose:
+    tf = [
         A.Resize(height=cfg["OUTPUT_SIZE"][0], width=cfg["OUTPUT_SIZE"][1]),
-        # ①  ToTensorV2 porta l’immagine da uint8 → float32 e la scala 0-1
-        ToTensorV2(),
-        # ②  Normalizziamo SUBITO con mean/std calcolati su range 0-1
-        A.Normalize(mean=cfg["MEAN"], std=cfg["STD"]),
-    ])
+        ToTensorV2(),                      # uint8 → float32, scala 0-1
+    ]
+    if "MEAN" in cfg and "STD" in cfg:    # ← li aggiunge solo se ci sono
+        tf.append(A.Normalize(mean=cfg["MEAN"], std=cfg["STD"]))
+    return A.Compose(tf)
+
 
 def get_gpu_augmentations(config: Dict[str, Any], aggressive_p: float = 0.5) -> nn.Module:
     """Pipeline GPU: tutte le augmentation pesanti, definite come un modulo nn.Sequential."""
@@ -740,10 +741,3 @@ def main():
 # =============================================================================
 if __name__ == "__main__":
     main()
-
-'''
-:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\nn\functional.py:5082: UserWarning: Default grid_sample and affine_grid behavior has changed to align_corners=False since 1.3.0. Please specify align_corners=True if the old behavior is desired. See the documentation of grid_sample for details.
-  warnings.warn(
-C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\nn\functional.py:5015: UserWarning: Default grid_sample and affine_grid behavior has changed to align_corners=False since 1.3.0. Please specify align_corners=True if the old behavior is desired. See the documentation of grid_sample for details.
-  warnings.warn(
-'''
