@@ -31,7 +31,7 @@ def lovasz_grad(gt_sorted):
 
 
 def iou_binary(preds, labels, EMPTY=1., ignore=None, per_image=True):
-    """
+    r"""
     IoU for foreground class
     binary: 1 foreground, 0 background
     """
@@ -51,7 +51,7 @@ def iou_binary(preds, labels, EMPTY=1., ignore=None, per_image=True):
 
 
 def iou(preds, labels, C, EMPTY=1., ignore=None, per_image=False):
-    """
+    r"""
     Array of IoU for each (non ignored) class
     """
     if not per_image:
@@ -76,13 +76,13 @@ def iou(preds, labels, C, EMPTY=1., ignore=None, per_image=False):
 
 
 def lovasz_hinge(logits, labels, per_image=True, ignore=None):
-    """
+    r'''
     Binary Lovasz hinge loss
       logits: [B, H, W] Variable, logits at each pixel (between -\infty and +\infty)
       labels: [B, H, W] Tensor, binary ground truth masks (0 or 1)
       per_image: compute the loss per image instead of per batch
       ignore: void class id
-    """
+    '''
     if per_image:
         loss = mean(lovasz_hinge_flat(*flatten_binary_scores(log.unsqueeze(0), lab.unsqueeze(0), ignore))
                           for log, lab in zip(logits, labels))
@@ -92,7 +92,7 @@ def lovasz_hinge(logits, labels, per_image=True, ignore=None):
 
 
 def lovasz_hinge_flat(logits, labels):
-    """
+    r"""
     Binary Lovasz hinge loss
       logits: [P] Variable, logits at each prediction (between -\infty and +\infty)
       labels: [P] Tensor, binary ground truth labels (0 or 1)
@@ -136,7 +136,7 @@ class StableBCELoss(torch.nn.modules.Module):
 
 
 def binary_xloss(logits, labels, ignore=None):
-    """
+    r"""
     Binary Cross entropy loss
       logits: [B, H, W] Variable, logits at each pixel (between -\infty and +\infty)
       labels: [B, H, W] Tensor, binary ground truth masks (0 or 1)
@@ -183,7 +183,7 @@ def lovasz_softmax_flat(probas, labels, classes='present'):
     class_to_sum = list(range(C)) if classes in ['all', 'present'] else classes
     for c in class_to_sum:
         fg = (labels == c).float() # foreground for class c
-        if (classes is 'present' and fg.sum() == 0):
+        if (classes == 'present' and fg.sum() == 0):
             continue
         if C == 1:
             if len(classes) > 1:

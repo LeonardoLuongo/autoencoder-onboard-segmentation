@@ -81,8 +81,8 @@ def get_config() -> Dict[str, Any]:
         "LR_HEAD": 1e-3, "LR_FULL": 1e-4, "WEIGHT_DECAY": 1e-6,
 
         "CONTRASTIVE_TEMP": 0.1,      # τ dell’InfoNCE
-        "CONTRASTIVE_MAX_SAMPLES": 4096,  # pixel da campionare per batch
-        "CONTRASTIVE_W": 0.2,         # peso della loss rispetto alle loss di segmento
+        "CONTRASTIVE_MAX_SAMPLES": 4096*3,  # pixel da campionare per batch
+        "CONTRASTIVE_W": 1,         # peso della loss rispetto alle loss di segmento
     }
     
     # FIX: Nomi delle classi anonimi come da richiesta
@@ -301,7 +301,7 @@ def plot_confusion_matrix(conf_matrix_np, class_names, ignore_index, save_path="
     plt.savefig(save_path, dpi=300, bbox_inches='tight'); plt.close(fig)
     tqdm.write(f"Matrice di confusione salvata in '{save_path}'")
 
-def train_one_epoch(model, loader, optimizer, scheduler, seg_loss_fn, contrast_loss_fn, seg_w, scaler, device, use_amp, current_epoch, total_epochs, ignore_index=None) -> float:
+def train_one_epoch(model, loader, optimizer, scheduler, loss_function, scaler, device, use_amp, current_epoch, total_epochs, ignore_index=None) -> float:
     model.train(); running_loss = 0.0; progress_bar = tqdm(loader, desc="Training", leave=False)
     for step, (images, masks) in enumerate(progress_bar):
         # Applica CutMix con una certa probabilità
@@ -311,21 +311,9 @@ def train_one_epoch(model, loader, optimizer, scheduler, seg_loss_fn, contrast_l
         images, masks = images.to(device), masks.to(device, dtype=torch.long)
         with autocast(enabled=use_amp, device_type=device.type if use_amp else 'cpu'):
             outputs = model(images); 
-            if contrast_loss_fn is not None:
-                feats = model.encoder(images)[-1]
-                mask_ds = F.interpolate(
-                    masks.unsqueeze(1).float(),
-                    size=feats.shape[2:], mode="nearest"
-                ).squeeze(1).long()
-                loss = seg_loss_fn(outputs, masks) + contrast_loss_fn(feats, mask_ds) * seg_w
-            else:
-                loss = seg_loss_fn(outputs, masks)
+            feats = model.encoder(images)[-1]
+            loss = loss_function(outputs, masks, feats)
 
-            if step % 100 == 0:
-                logits_ds = F.interpolate(outputs, scale_factor=0.5,
-                                          mode='bilinear', align_corners=False)
-                loss += 0.6 * lovasz_softmax(F.softmax(logits_ds, dim=1),
-                                              masks, ignore=ignore_index)
         optimizer.zero_grad(); scaler.scale(loss).backward(); scaler.step(optimizer); scaler.update(); 
         if scheduler is not None:
             scheduler.step()
@@ -538,7 +526,7 @@ def main():
     ).to(device)
 
     # Aggiungiamo la Lovasz
-    criterion_lovasz = LovaszLoss(mode='multiclass',ignore_index=config["IGNORE_INDEX"]).to(device)
+    # criterion_lovasz = LovaszLoss(mode='multiclass',ignore_index=config["IGNORE_INDEX"]).to(device)
 
     criterion_ft  = FocalTverskyLoss(
                     alpha=0.9, beta=0.1, gamma=3.0,
@@ -550,9 +538,31 @@ def main():
     #                     weight=class_weights,
     #                     ignore_index=config["IGNORE_INDEX"]
     #                 ).to(device)
+    steps = -1
+    def combined_loss(pred, target, feats):
+        steps = steps + 1
+        if steps % 50 == 0:
+            mask_ds = F.interpolate(
+                target.unsqueeze(1).float(),
+                size=feats.shape[2:], mode="nearest"
+            ).squeeze(1).long()
 
-    def combined_loss(pred, target):
-        return 0.4 * criterion_ft(pred, target) # + 0.6 * criterion_lovasz(pred, target) 
+            return 0.4 * criterion_ft(pred, target) \
+            + 0.6 * lovasz_softmax(F.softmax(pred, dim=1), target, ignore=config["IGNORE_INDEX"]) \
+            + pixel_contrast(feats, mask_ds) * config["CONTRASTIVE_W"]
+
+            # mask_ds = F.interpolate(
+            #     masks.unsqueeze(1).float(),
+            #     size=feats.shape[2:], mode="nearest"
+            # ).squeeze(1).long()
+            # if contrast_loss_fn is not None:
+            #     loss = seg_loss_fn(outputs, masks) + contrast_loss_fn(feats, mask_ds) * seg_w
+            # else:
+            #     loss = seg_loss_fn(outputs, masks)
+        elif steps % 10 == 0:
+            return 0.4 * criterion_ft(pred, target) + 0.6 * lovasz_softmax(F.softmax(pred, dim=1), target, ignore=config["IGNORE_INDEX"]) 
+        else:
+            return criterion_ft(pred, target)
 
     best_iou = -1.0; best_conf_matrix = None; global_epoch = 0
 
@@ -568,8 +578,7 @@ def main():
     for epoch in range(config["FREEZE_EPOCHS"]):
         global_epoch += 1; tqdm.write(f"\n--- Fase 1 / Epoch {epoch+1}/{config['FREEZE_EPOCHS']} (Global: {global_epoch}) ---")
         train_loss = train_one_epoch(
-            model=model, loader=train_loader, optimizer=optimizer, scheduler=scheduler,
-            seg_loss_fn=combined_loss, contrast_loss_fn=pixel_contrast, seg_w=config["CONTRASTIVE_W"], 
+            model=model, loader=train_loader, optimizer=optimizer, scheduler=scheduler, loss_function=combined_loss, 
             scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["FREEZE_EPOCHS"]
         )
         val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config)
@@ -595,8 +604,7 @@ def main():
         global_epoch += 1; tqdm.write(f"\n--- Fase 2 / Epoch {epoch+1}/{config['UNFREEZE_EPOCHS']} (Global: {global_epoch}) ---")
         
         train_loss = train_one_epoch(
-            model=model, loader=train_loader, optimizer=optimizer, scheduler=None, 
-            seg_loss_fn=combined_loss, contrast_loss_fn=pixel_contrast, seg_w=config["CONTRASTIVE_W"], 
+            model=model, loader=train_loader, optimizer=optimizer, scheduler=None, loss_function=combined_loss, 
             scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["UNFREEZE_EPOCHS"]
         )
         val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config)
