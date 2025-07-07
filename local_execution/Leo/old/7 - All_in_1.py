@@ -596,17 +596,17 @@ def main():
         
     def build_gpu_augs(cfg, p=0.5):
         return K.AugmentationSequential(
-            K.RandomHorizontalFlip(p=0.5,         align_corners=False),
-            K.RandomVerticalFlip( p=p/2,          align_corners=False),
+            K.RandomHorizontalFlip(p=0.5),
+            K.RandomVerticalFlip( p=p/2),
             K.RandomRotation(     degrees=90,
-                                p=p,            align_corners=False,
+                                p=p,
                                 resample="bilinear", padding_mode="border"),
             K.ColorJitter( brightness=0.2, contrast=0.2,
                         saturation=0.2, hue=0.1,
-                        p=0.7,          align_corners=False),
-            K.RandomGamma(  gamma=(0.8,1.2), p=0.7, align_corners=False),
+                        p=0.7),
+            K.RandomGamma(  gamma=(0.8,1.2), p=0.7),
             K.RandomGaussianBlur(kernel_size=(3,5), sigma=(0.1,2.0),
-                                p=0.4,      align_corners=False),
+                                p=0.4),
             data_keys=["input", "mask"],
             same_on_batch=False
         ).to(cfg["DEVICE"])
