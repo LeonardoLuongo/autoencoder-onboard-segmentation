@@ -81,8 +81,8 @@ def get_config() -> Dict[str, Any]:
         "LR_HEAD": 1e-3, "LR_FULL": 1e-4, "WEIGHT_DECAY": 1e-6,
 
         "CONTRASTIVE_TEMP": 0.1,      # τ dell’InfoNCE
-        "CONTRASTIVE_MAX_SAMPLES": 4096*3,  # pixel da campionare per batch
-        "CONTRASTIVE_W": 1,         # peso della loss rispetto alle loss di segmento
+        "CONTRASTIVE_MAX_SAMPLES": 4096,  # pixel da campionare per batch
+        "CONTRASTIVE_W": 0.6,         # peso della loss rispetto alle loss di segmento
     }
     
     # FIX: Nomi delle classi anonimi come da richiesta
@@ -538,7 +538,15 @@ def main():
     criterion_wce = nn.CrossEntropyLoss(weight=class_weights,ignore_index=config["IGNORE_INDEX"]).to(device)
 
     def combined_loss(pred, target, feats=None):
-        return 0.8 * criterion_ft(pred, target) + 0.2 * criterion_wce(pred, target)
+        loss_ft = criterion_ft(pred, target) 
+        if feats is None:
+            return loss_ft 
+        
+        mask_ds = F.interpolate(
+            target.unsqueeze(1).float(),
+            size=feats.shape[2:], mode="nearest"
+        ).squeeze(1).long()
+        return loss_ft + pixel_contrast(feats, mask_ds) * config["CONTRASTIVE_TEMP"]
 
     best_iou = -1.0; best_conf_matrix = None; global_epoch = 0
 
@@ -572,9 +580,11 @@ def main():
     train_loader = DataLoader(train_dataset, batch_size=config["BATCH_SIZE"], shuffle=True, num_workers=config["NUM_WORKERS_TRAIN"], pin_memory=pin_mem, persistent_workers=config["PERSISTENT_WORKERS"])
 
     for param in model.encoder.parameters(): param.requires_grad = True
-    optimizer = optim.AdamW(model.parameters(), lr=config["LR_FULL"]) #, weight_decay=config["WEIGHT_DECAY"])
+    optimizer = optim.AdamW(model.parameters(), lr=config["LR_FULL"], weight_decay=config["WEIGHT_DECAY"])
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5, cooldown=1, min_lr=1e-7)
             
+    def combined_loss(pred, target, feats=None):
+        return 0.8 * criterion_ft(pred, target) + 0.2 * criterion_wce(pred, target)
 
     for epoch in range(config["UNFREEZE_EPOCHS"]):
         global_epoch += 1; tqdm.write(f"\n--- Fase 2 / Epoch {epoch+1}/{config['UNFREEZE_EPOCHS']} (Global: {global_epoch}) ---")
@@ -599,7 +609,6 @@ def main():
     
     def combined_loss(pred, target, feats=None):
         return 0.2 * criterion_ft(pred, target) + 0.8 * lovasz_softmax(F.softmax(pred, dim=1), target, ignore=config["IGNORE_INDEX"]) 
-
 
     for epoch in range(config["FINE_TUNING_EPOCHS"]):
         global_epoch += 1; tqdm.write(f"\n--- Fase 3 / Epoch {epoch+1}/{config['FINE_TUNING_EPOCHS']} (Global: {global_epoch}) ---")
