@@ -44,7 +44,7 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 import matplotlib.pyplot as plt
 import seaborn as sns
-from segmentation_models_pytorch.losses import LovaszLoss
+from lovasz import lovasz_softmax
 
 # =============================================================================
 # 2. RIPRODUCIBILITÀ
@@ -301,9 +301,9 @@ def plot_confusion_matrix(conf_matrix_np, class_names, ignore_index, save_path="
     plt.savefig(save_path, dpi=300, bbox_inches='tight'); plt.close(fig)
     tqdm.write(f"Matrice di confusione salvata in '{save_path}'")
 
-def train_one_epoch(model, loader, optimizer, scheduler, seg_loss_fn, contrast_loss_fn, seg_w, scaler, device, use_amp, current_epoch, total_epochs):
+def train_one_epoch(model, loader, optimizer, scheduler, seg_loss_fn, contrast_loss_fn, seg_w, scaler, device, use_amp, current_epoch, total_epochs, ignore_index=None) -> float:
     model.train(); running_loss = 0.0; progress_bar = tqdm(loader, desc="Training", leave=False)
-    for images, masks in progress_bar:
+    for step, (images, masks) in enumerate(progress_bar):
         # Applica CutMix con una certa probabilità
         if current_epoch <= total_epochs - 5 and torch.rand(1) < 0.5: # es. 50% di probabilità per batch
             images, masks = cutmix_batch(images, masks, alpha=1.0)
@@ -320,6 +320,12 @@ def train_one_epoch(model, loader, optimizer, scheduler, seg_loss_fn, contrast_l
                 loss = seg_loss_fn(outputs, masks) + contrast_loss_fn(feats, mask_ds) * seg_w
             else:
                 loss = seg_loss_fn(outputs, masks)
+
+            if step % 100 == 0:
+                logits_ds = F.interpolate(outputs, scale_factor=0.5,
+                                          mode='bilinear', align_corners=False)
+                loss += 0.6 * lovasz_softmax(F.softmax(logits_ds, dim=1),
+                                              masks, ignore=ignore_index)
         optimizer.zero_grad(); scaler.scale(loss).backward(); scaler.step(optimizer); scaler.update(); 
         if scheduler is not None:
             scheduler.step()
@@ -546,7 +552,7 @@ def main():
     #                 ).to(device)
 
     def combined_loss(pred, target):
-        return 0.4 * criterion_ft(pred, target) + 0.6 * criterion_lovasz(pred, target) 
+        return 0.4 * criterion_ft(pred, target) # + 0.6 * criterion_lovasz(pred, target) 
 
     best_iou = -1.0; best_conf_matrix = None; global_epoch = 0
 
