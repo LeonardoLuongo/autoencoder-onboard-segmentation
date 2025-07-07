@@ -125,7 +125,7 @@ def load_or_compute_preprocessing(config: dict) -> dict:
 
     # ------------- 2) tenta di caricare la cache --------------------------- #
     if os.path.isfile(CACHE_PATH):
-        cache = torch.load(CACHE_PATH)
+        cache = torch.load(CACHE_PATH, weights_only=False)
         if cache.get("dataset_version") == dataset_sig:
             print("Cache trovata e valida — salto il preprocessing.")
             return cache
@@ -596,11 +596,11 @@ def main():
     def get_gpu_augmentations(config: Dict[str, Any], aggressive_p: float = 0.5) -> nn.Module:
         gpu_aug = K.AugmentationSequential(
             K.RandomHorizontalFlip(p=0.5),
-            K.RandomVerticalFlip(p=aggressive_p / 2, align_corners=False),
-            K.RandomRotation(degrees=90, p=aggressive_p, align_corners=False), # FIX
-            K.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.7, align_corners=False),
-            K.RandomGamma(gamma=(0.8, 1.2), p=0.7, align_corners=False),
-            K.RandomGaussianBlur(kernel_size=(3, 5), sigma=(0.1, 2.0), p=0.4, align_corners=False),
+            K.RandomVerticalFlip(p=aggressive_p / 2),
+            K.RandomRotation(degrees=90, p=aggressive_p), # FIX
+            K.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.7),
+            K.RandomGamma(gamma=(0.8, 1.2), p=0.7),
+            K.RandomGaussianBlur(kernel_size=(3, 5), sigma=(0.1, 2.0), p=0.4),
             data_keys=["input", "mask"],
             same_on_batch=False
         )
@@ -743,24 +743,57 @@ if __name__ == "__main__":
     main()
 
 '''
-> & "C:/Program Files/Python312/python.exe" "d:/MLPoject-Git/autoencoder-onboard-segmentation/local_execution/Leo/old/7 - All_in_1.py"
-Statistiche personalizzate calcolate e caricate nella configurazione.
-Traceback (most recent call last):
+Traceback (most recent call last):                                                                                                                                 
   File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\Leo\old\7 - All_in_1.py", line 743, in <module>
     main()
-  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\Leo\old\7 - All_in_1.py", line 579, in main
-    cache  = load_or_compute_preprocessing(config)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\Leo\old\7 - All_in_1.py", line 128, in load_or_compute_preprocessing
-    cache = torch.load(CACHE_PATH)
-            ^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\serialization.py", line 1524, in load
-    raise pickle.UnpicklingError(_get_wo_message(str(e))) from None
-_pickle.UnpicklingError: Weights only load failed. This file can still be loaded, to do so you have two options, do those steps only if you trust the source of the checkpoint.
-        (1) In PyTorch 2.6, we changed the default value of the `weights_only` argument in `torch.load` from `False` to `True`. Re-running `torch.load` with `weights_only` set to `False` will likely succeed, but it can result in arbitrary code execution. Do it only if you got the file from a trusted source.
-        (2) Alternatively, to load with `weights_only=True` please check the recommended steps in the following error message.
-        WeightsUnpickler error: Unsupported global: GLOBAL numpy.core.multiarray._reconstruct was not an allowed global by default. Please use `torch.serialization.add_safe_globals([numpy.core.multiarray._reconstruct])` or the `torch.serialization.safe_globals([numpy.core.multiarray._reconstruct])` context manager to allowlist this global if you trust this class/function.
-
-Check the documentation of torch.load to learn more about types accepted by default with weights_only https://pytorch.org/docs/stable/generated/torch.load.html. 
-
+  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\Leo\old\7 - All_in_1.py", line 665, in main
+    train_loss = train_one_epoch(
+                 ^^^^^^^^^^^^^^^^
+  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\Leo\old\7 - All_in_1.py", line 342, in train_one_epoch
+    for step, (images, masks) in enumerate(progress_bar):
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\tqdm\std.py", line 1181, in __iter__
+    for obj in iterable:
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\dataloader.py", line 733, in __next__
+    data = self._next_data()
+           ^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\dataloader.py", line 1515, in _next_data
+    return self._process_data(data, worker_id)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\dataloader.py", line 1550, in _process_data
+    data.reraise()
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\_utils.py", line 750, in reraise
+    raise exception
+AttributeError: Caught AttributeError in DataLoader worker process 0.
+Original Traceback (most recent call last):
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\_utils\worker.py", line 349, in _worker_loop
+    data = fetcher.fetch(index)  # type: ignore[possibly-undefined]
+           ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\utils\data\_utils\fetch.py", line 52, in fetch
+    data = [self.dataset[idx] for idx in possibly_batched_index]
+            ~~~~~~~~~~~~^^^^^
+  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\Leo\old\7 - All_in_1.py", line 250, in __getitem__
+    augmented = self.transform(image=image, mask=mask)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\albumentations\core\composition.py", line 610, in __call__
+    data = t(**data)
+           ^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\albumentations\core\transforms_interface.py", line 273, in __call__
+    return self.apply_with_params(params, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\albumentations\core\transforms_interface.py", line 310, in apply_with_params
+    target_function(ensure_contiguous_output(arg), **params),
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\albumentations\augmentations\pixel\transforms.py", line 246, in apply
+    return normalize(
+           ^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\albucore\functions.py", line 332, in normalize
+    return normalize_opencv(img, mean, denominator)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\albucore\decorators.py", line 42, in wrapped_function
+    result = func(img, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\albucore\functions.py", line 286, in normalize_opencv
+    img = img.astype(np.float32, copy=False)
+          ^^^^^^^^^^
+AttributeError: 'Tensor' object has no attribute 'astype'. Did you mean: 'dtype'?
 '''
