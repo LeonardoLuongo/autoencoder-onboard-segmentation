@@ -76,7 +76,7 @@ def get_config() -> Dict[str, Any]:
         "MODEL_SAVE_PATH": os.path.join(base_path, "best_model_b3.pth"),
 
         "ENCODER": "efficientnet-b3", "ENCODER_WEIGHTS": "imagenet",
-        "OUTPUT_SIZE": (384, 768), "BATCH_SIZE": 4, 
+        "OUTPUT_SIZE": (384, 768), "BATCH_SIZE": 16, 
         "NUM_CLASSES": 9, "IGNORE_INDEX": 0, "VALIDATION_SPLIT": 0.2,
 
         "FREEZE_EPOCHS": 7, "UNFREEZE_EPOCHS": 23, "FINE_TUNING_EPOCHS": 10,
@@ -181,7 +181,7 @@ def get_gpu_augmentations(config: Dict[str, Any], aggressive_p: float = 0.5) -> 
     gpu_aug = K.AugmentationSequential(
         K.RandomHorizontalFlip(p=0.5),
         K.RandomVerticalFlip(p=aggressive_p / 2),
-        K.RandomRotation(degrees=90, p=aggressive_p),
+        K.RandomRotation(degrees=90, p=aggressive_p, align_corners=False),
         K.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.7),
         K.RandomGamma(gamma=(0.8, 1.2), p=0.7),
         K.RandomGaussianBlur(kernel_size=(3, 5), sigma=(0.1, 2.0), p=0.4),
@@ -607,7 +607,7 @@ def main():
             return loss_segmentation
         
         mask_ds = F.interpolate(
-            target.unsqueeze(1).float(),
+            target.float(),
             size=feats.shape[2:], mode="nearest"
          ).squeeze(1).long()
         # FIX: Usa CONTRASTIVE_W come peso, non TEMP
@@ -703,3 +703,9 @@ def main():
 if __name__ == "__main__":
     main()
 
+'''
+:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\nn\functional.py:5082: UserWarning: Default grid_sample and affine_grid behavior has changed to align_corners=False since 1.3.0. Please specify align_corners=True if the old behavior is desired. See the documentation of grid_sample for details.
+  warnings.warn(
+C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\nn\functional.py:5015: UserWarning: Default grid_sample and affine_grid behavior has changed to align_corners=False since 1.3.0. Please specify align_corners=True if the old behavior is desired. See the documentation of grid_sample for details.
+  warnings.warn(
+'''
