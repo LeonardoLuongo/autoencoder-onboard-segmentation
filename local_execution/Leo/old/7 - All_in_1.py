@@ -743,16 +743,3 @@ def main():
 if __name__ == "__main__":
     main()
 
-'''
-
---- INIZIO FASE 1: TRAINING DEL DECODER (ENCODER CONGELATO) ---
-
---- Fase 1 / Epoch 1/7 (Global: 1) ---
-Training:   0%|                                                                                                                           | 0/174 [00:00<?, ?it/s]C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\nn\functional.py:5082: UserWarning: Default grid_sample and affine_grid behavior has changed to align_corners=False since 1.3.0. Please specify align_corners=True if the old behavior is desired. See the documentation of grid_sample for details.
-  warnings.warn(
-:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\nn\functional.py:5082: UserWarning: Default grid_sample and affine_grid behavior has changed to align_corners=False since 1.3.0. Please specify align_corners=True if the old behavior is desired. See the documentation of grid_sample for details.
-  warnings.warn(
-C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\nn\functional.py:5015: UserWarning: Default grid_sample and affine_grid behavior has changed to align_corners=False since 1.3.0. Please specify align_corners=True if the old behavior is desired. See the documentation of grid_sample for details.
-  warnings.warn(
-C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\torch\optim\lr_scheduler.py:182: UserWarning: Detected call of `lr_scheduler.step()` before `optimizer.step()`. In PyTorch 1.1.0 and later, you should call them in the opposite order: `optimizer.step()` before `lr_scheduler.step()`.  Failure to do this will result in PyTorch skipping the first value of the learning rate schedule. See more details at https://pytorch.org/docs/stable/optim.html#how-to-adjust-learning-rat
-'''
