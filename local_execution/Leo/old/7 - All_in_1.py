@@ -304,6 +304,7 @@ def train_one_epoch(model, loader, optimizer, scheduler, loss_function, scaler, 
     progress_bar = tqdm(loader, desc="Training", leave=False)
     
     for step, (images, masks) in enumerate(progress_bar):
+        images = images.float() / 255.0
         images, raw_masks = gpu_augmentations(images, masks.float())
         masks_long = raw_masks.long()
         images = K.Normalize(mean=torch.tensor(mean, device=images.device),
@@ -702,10 +703,3 @@ def main():
 if __name__ == "__main__":
     main()
 
-'''
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\kornia\augmentation\_2d\base.py", line 56, in transform_tensor
-    _validate_input_dtype(input, accepted_dtypes=[float16, float32, float64])
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\kornia\augmentation\utils\helpers.py", line 222, in _validate_input_dtype
-    raise TypeError(f"Expected input of {accepted_dtypes}. Got {input.dtype}")
-TypeError: Expected input of [torch.float16, torch.float32, torch.float64]. Got torch.uint8
-'''
