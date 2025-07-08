@@ -50,7 +50,7 @@ import kornia.geometry.transform as KGT
 from kornia.utils import image_to_tensor
 import torch
 from segmentation_models_pytorch import base as smp_base
-
+from kornia.losses import HausdorffERLoss
 
 # =============================================================================
 # 2. RIPRODUCIBILITÀ
@@ -554,7 +554,7 @@ def train_one_epoch(model, loader, optimizer, scheduler, loss_function, scaler, 
             feats = None 
             if requires_feats:
                 feats = model.encoder(images)[-1]
-            loss = loss_function(outputs, masks, feats, current_epoch)
+            loss = loss_function(outputs, masks, feats=feats, epoch=current_epoch)
 
         optimizer.zero_grad(); scaler.scale(loss).backward(); scaler.step(optimizer); scaler.update(); 
         if scheduler is not None:
@@ -952,9 +952,18 @@ def main():
         from_logits=True
     ).to(device)
 
+    hd_loss = HausdorffERLoss(alpha=2.0, k=10, reduction='mean').to(device)
+
     def combined_loss(pred, target, feats=None, epoch=None):
+        probs = torch.softmax(pred, dim=1)                               # (B,C,H,W)
+        gt_1hot = torch.nn.functional.one_hot(target, pred.size(1))      # (B,H,W,C)
+        gt_1hot = gt_1hot.permute(0,3,1,2).float()                       # (B,C,H,W)
+
+        lam = min(10, epoch)               # stesso scheduling che usavi
+        loss_bnd = lam * hd_loss(probs, gt_1hot)
         return (0.35 * criterion_ft(pred, target) +
-                0.65 * criterion_lov(pred, target))
+                0.65 * criterion_lov(pred, target) + 
+                loss_bnd)
     
     
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(fine_tune_optimizer, 'max', patience=3, factor=0.5, cooldown=1, min_lr=1e-7)
