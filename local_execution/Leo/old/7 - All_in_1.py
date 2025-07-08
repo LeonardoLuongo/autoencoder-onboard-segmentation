@@ -251,34 +251,48 @@ def get_val_transforms(output_size: Tuple[int, int], mean: float, std: float) ->
 
 from kornia.constants import DataKey, Resample
 
-def get_train_transforms_kornia(config, aggressive_p=0.5):
+def get_train_transforms_kornia(config, disable=False, aggressive_p=0.5):
     output_size = config["OUTPUT_SIZE"]
     mean, std = config["MEAN"], config["STD"]
+    if disable:
+        return K.AugmentationSequential(
+            K.Resize(size=output_size),
+            K.Normalize(mean=torch.tensor(mean), std=torch.tensor(std)),
 
-    return K.AugmentationSequential(
-        # --- augmentations ---
-        K.RandomHorizontalFlip(p=0.5),
-        K.RandomVerticalFlip(p=aggressive_p / 2),
-        K.RandomRotation(degrees=180, p=aggressive_p),
-        K.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.7),
-        K.RandomGaussianBlur(kernel_size=(3, 5), sigma=(0.1, 2.0), p=0.4),
+            data_keys=["input", "mask"],
+            extra_args={
+                DataKey.MASK: {          # <-- unica chiave, vale per TUTTI gli op
+                    "resample": Resample.NEAREST,
+                    "align_corners": False,
+                }
+            },
+            same_on_batch=False,
+        )
+    else:
+        return K.AugmentationSequential(
+            # --- augmentations ---
+            K.RandomHorizontalFlip(p=0.5),
+            K.RandomVerticalFlip(p=aggressive_p / 2),
+            K.RandomRotation(degrees=180, p=aggressive_p),
+            K.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.7),
+            K.RandomGaussianBlur(kernel_size=(3, 5), sigma=(0.1, 2.0), p=0.4),
 
-        K.RandomErasing(p=0.5, scale=(0.02, 0.1)),
-        K.RandomClahe(p=0.4), 
-        K.RandomGamma(gamma=(0.7, 1.5), p=0.5),
+            K.RandomErasing(p=0.5, scale=(0.02, 0.1)),
+            K.RandomClahe(p=0.4), 
+            K.RandomGamma(gamma=(0.7, 1.5), p=0.5),
 
-        K.Resize(size=output_size),
-        K.Normalize(mean=torch.tensor(mean), std=torch.tensor(std)),
+            K.Resize(size=output_size),
+            K.Normalize(mean=torch.tensor(mean), std=torch.tensor(std)),
 
-        data_keys=["input", "mask"],
-        extra_args={
-            DataKey.MASK: {          # <-- unica chiave, vale per TUTTI gli op
-                "resample": Resample.NEAREST,
-                "align_corners": False,
-            }
-        },
-        same_on_batch=False,
-    )
+            data_keys=["input", "mask"],
+            extra_args={
+                DataKey.MASK: {          # <-- unica chiave, vale per TUTTI gli op
+                    "resample": Resample.NEAREST,
+                    "align_corners": False,
+                }
+            },
+            same_on_batch=False,
+        )
 
 
 def get_val_transforms_kornia(config: Dict[str, Any]) -> torch.nn.Sequential:
@@ -732,7 +746,7 @@ def main():
     tqdm.write(f"Device: {device} | Mixed Precision: {use_amp}"); tqdm.write(f"Strategia Finale: {config['ENCODER']} con Augmentation Mirata")
 
     # Pipeline di augmentation diverse per training e validazione
-    train_transforms = get_train_transforms_kornia(config, aggressive_p=0.1) 
+    train_transforms = get_train_transforms_kornia(config, aggressive_p=0.03) 
     val_transforms = get_val_transforms_kornia(config)
     
     train_dataset = SegmentationDataset(train_dirs, train_transforms, config)
