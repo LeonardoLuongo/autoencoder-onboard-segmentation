@@ -794,8 +794,7 @@ def fast_boundary_loss(logits, targets, ignore_index=0, down_k=4):
     """
     # ↓↓↓ Step-1: downsample (antialias=False evita blur sui label)
     logits_ds  = F.avg_pool2d(logits,      kernel_size=down_k, stride=down_k)
-    targets_ds = F.avg_pool2d(targets.float(), kernel_size=down_k,
-                              stride=down_k, divisor_override=1).long()
+    targets_ds = F.avg_pool2d(targets.float(),kernel_size=down_k,stride=down_k).round().long()
 
     C = logits_ds.shape[1]
     gt_1hot = F.one_hot(targets_ds, num_classes=C).permute(0,3,1,2).float()
@@ -984,42 +983,3 @@ def main():
 # =============================================================================
 if __name__ == "__main__":
     main()
-'''
---- INIZIO FASE 3: FINE-TUNING FINALE ---
-
---- Fase 3 / Epoch 1/10 (Global: 1) ---
-Training:   0%|                                                                                                                           | 0/928 [00:00<?, ?it/s]C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [32,0,0], thread: [33,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [32,0,0], thread: [34,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [30,0,0], thread: [32,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [30,0,0], thread: [33,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [30,0,0], thread: [34,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [27,0,0], thread: [32,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [27,0,0], thread: [33,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-C:\actions-runner\_work\pytorch\pytorch\pytorch\aten\src\ATen\native\cuda\ScatterGatherKernel.cu:367: block: [27,0,0], thread: [34,0,0] Assertion `idx_dim >= 0 && idx_dim < index_size && "index out of bounds"` failed.
-Traceback (most recent call last):
-  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\Leo\old\7 - All_in_1.py", line 986, in <module>
-    main()
-  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\Leo\old\7 - All_in_1.py", line 964, in main
-    train_loss = train_one_epoch(
-                 ^^^^^^^^^^^^^^^^
-  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\Leo\old\7 - All_in_1.py", line 555, in train_one_epoch
-    loss = loss_function(outputs, masks, feats, current_epoch)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\Leo\old\7 - All_in_1.py", line 948, in combined_loss
-    loss_bnd = lam  * fast_boundary_loss(pred, target, ignore_index=config["IGNORE_INDEX"])
-                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "d:\MLPoject-Git\autoencoder-onboard-segmentation\local_execution\Leo\old\7 - All_in_1.py", line 804, in fast_boundary_loss
-    dt = kornia.contrib.distance_transform(1 - gt_1hot)
-         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\kornia\contrib\distance_transform.py", line 60, in distance_transform
-    grid = create_meshgrid(
-           ^^^^^^^^^^^^^^^^
-  File "C:\Users\leona\AppData\Roaming\Python\Python312\site-packages\kornia\utils\grid.py", line 67, in create_meshgrid
-    xs: Tensor = torch.linspace(0, width - 1, width, device=device, dtype=dtype)
-                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-RuntimeError: CUDA error: device-side assert triggered
-CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
-For debugging consider passing CUDA_LAUNCH_BLOCKING=1
-Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
-
-'''
