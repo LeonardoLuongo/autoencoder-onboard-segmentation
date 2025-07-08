@@ -858,7 +858,7 @@ def main():
 
         # loss_ft = 0.35 * criterion_ft(pred, target) 
         # loss_lov = 0.55 * lovasz_softmax(F.softmax(pred, dim=1), target, ignore=config["IGNORE_INDEX"]) 
-        loss_bound = boundaryLoss(pred, target)
+        loss_bound = 20 * boundaryLoss(pred, target)
 
         # return loss_ft + loss_lov + loss_bound
         return loss_bound
