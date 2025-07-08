@@ -802,7 +802,7 @@ def main():
 
     # # --- FASE 2: UNFREEZE ALL, FINE-TUNE ---
     tqdm.write("\n--- INIZIO FASE 2: FINE-TUNING DELL'INTERA RETE (ENCODER SCONGELATO) ---")
-    model.segmentation_head.dropout.p = 0.5
+    model.segmentation_head.dropout.p = 0.25
     train_loader.dataset.transform = get_train_transforms_kornia(config, aggressive_p=0.5) 
 
     for param in model.encoder.parameters(): param.requires_grad = True
