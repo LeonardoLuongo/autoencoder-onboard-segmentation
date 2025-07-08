@@ -445,7 +445,7 @@ def sliding_window_predict(model, image, patch, stride, num_classes):
     for y in range(0, H - ph + 1, sh):
         for x in range(0, W - pw + 1, sw):
             patch_img = image[:, :, y:y+ph, x:x+pw]
-            with torch.no_grad(), autocast(enabled=False):
+            with torch.no_grad(), autocast(enabled=False, device_type=device.type):
                 logits = model(patch_img)           # (1,C,ph,pw)
                 prob   = torch.softmax(logits, 1)
             prob_sum[:, :, y:y+ph, x:x+pw] += prob
@@ -847,7 +847,7 @@ def main():
         loss_ft = 0.35 * criterion_ft(pred, target) 
         loss_lov = 0.55 * lovasz_softmax(F.softmax(pred, dim=1), target, ignore=config["IGNORE_INDEX"]) 
         lambda_bound = 20.0
-        loss_bound = lambda_bound * boundaryLoss(pred, target)
+        loss_bound = 0.10 * lambda_bound * boundaryLoss(pred, target)
 
         return loss_ft + loss_lov + loss_bound
     
