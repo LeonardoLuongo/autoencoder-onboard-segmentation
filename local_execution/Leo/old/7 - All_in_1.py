@@ -766,22 +766,20 @@ class BoundaryLoss(nn.Module):
         self.ignore_index = ignore_index
 
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        probs = torch.softmax(logits, dim=1)
-        C = probs.shape[1]
-        
-        # Prepara il target one-hot
+        # 1. Prepara i target one-hot sulla GPU
+        C = logits.shape[1]
         one_hot_targets = F.one_hot(targets, num_classes=C).permute(0, 3, 1, 2).float()
         
-        with torch.no_grad():
-            # Distance Transform per la penalità esterna
-            gt_b_dt = distance_transform(1 - one_hot_targets)
-            # Distance Transform per la penalità interna
-            pred_b_dt = distance_transform(1 - (probs > 0.5).float())
-
-        # Calcola la loss
-        multiplied = probs * gt_b_dt + (1 - probs) * pred_b_dt
+        # 2. Calcola le distance transform sulla GPU
+        # Kornia rileva automaticamente il device del tensore di input
+        dt_external = distance_transform(1 - one_hot_targets)
         
-        # Applica la maschera di ignore_index
+        # 3. Calcola la loss
+        # Usiamo solo la penalità esterna, che è più stabile e comune
+        probs = torch.softmax(logits, dim=1)
+        multiplied = probs * dt_external
+        
+        # 4. Applica la maschera di ignore_index
         if self.ignore_index is not None:
             mask = (targets != self.ignore_index).unsqueeze(1).expand_as(multiplied)
             multiplied = multiplied * mask
