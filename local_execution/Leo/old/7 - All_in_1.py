@@ -218,7 +218,7 @@ def calculate_mean_std(loader: DataLoader) -> Tuple[np.ndarray, np.ndarray]:
 
 from kornia.constants import DataKey, Resample
 
-def get_train_transforms_kornia(config, disable=False, aggressive_p=0.5):
+def get_train_transforms_kornia_crop(config, disable=False, aggressive_p=0.5):
     patch = config["PATCH_SIZE"]
     mean, std = config["MEAN"], config["STD"]
     if disable:
@@ -261,13 +261,67 @@ def get_train_transforms_kornia(config, disable=False, aggressive_p=0.5):
             same_on_batch=False,
         )
 
+def get_train_transforms_kornia_resize(config, disable=False, aggressive_p=0.5):
+    patch = config["PATCH_SIZE"]
+    mean, std = config["MEAN"], config["STD"]
+    if disable:
+        return K.AugmentationSequential(
+            K.Resize(patch),
+            K.Normalize(mean=torch.tensor(mean), std=torch.tensor(std)),
 
-def get_val_transforms_kornia(config: Dict[str, Any]) -> torch.nn.Sequential:
+            data_keys=["input", "mask"],
+            extra_args={
+                DataKey.MASK: {          # <-- unica chiave, vale per TUTTI gli op
+                    "resample": Resample.NEAREST,
+                    "align_corners": False,
+                }
+            },
+            same_on_batch=False,
+        )
+    else:
+        return K.AugmentationSequential(
+            K.Resize(patch),
+
+            # --- augmentations ---
+            K.RandomHorizontalFlip(p=0.5),
+            K.RandomVerticalFlip(p=aggressive_p / 2),
+            K.RandomRotation(degrees=180, p=aggressive_p),
+            K.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.7),
+            K.RandomGaussianBlur(kernel_size=(3, 5), sigma=(0.1, 2.0), p=0.4),
+
+            K.RandomClahe(p=0.4), 
+            K.RandomGamma(gamma=(0.7, 1.5), p=0.5),
+
+            K.Normalize(mean=torch.tensor(mean), std=torch.tensor(std)),
+
+            data_keys=["input", "mask"],
+            extra_args={
+                DataKey.MASK: {          # <-- unica chiave, vale per TUTTI gli op
+                    "resample": Resample.NEAREST,
+                    "align_corners": False,
+                }
+            },
+            same_on_batch=False,
+        )
+
+def get_val_transforms_kornia_crop(config: Dict[str, Any]) -> torch.nn.Sequential:
     patch = config["PATCH_SIZE"]
     mean, std = config["MEAN"], config["STD"]
     
     return K.AugmentationSequential(
         K.RandomCrop(size=patch, p=1.0, same_on_batch=False),
+        K.Normalize(mean=torch.tensor(mean), std=torch.tensor(std)),
+        
+        data_keys=['input', 'mask'],
+        extra_args={DataKey.MASK: {"resample": Resample.NEAREST}},
+    )
+
+def get_val_transforms_kornia_resize(config: Dict[str, Any]) -> torch.nn.Sequential:
+    patch = config["PATCH_SIZE"]
+    mean, std = config["MEAN"], config["STD"]
+    
+    return K.AugmentationSequential(
+        K.Resize(patch),
         K.Normalize(mean=torch.tensor(mean), std=torch.tensor(std)),
         
         data_keys=['input', 'mask'],
@@ -756,8 +810,8 @@ def main():
     tqdm.write(f"Device: {device} | Mixed Precision: {use_amp}"); tqdm.write(f"Strategia Finale: {config['ENCODER']} con Augmentation Mirata")
 
     # Pipeline di augmentation diverse per training e validazione
-    train_transforms = get_train_transforms_kornia(config, aggressive_p=0.01) 
-    val_transforms = get_val_transforms_kornia(config)
+    train_transforms = get_train_transforms_kornia_resize(config, aggressive_p=0.01) 
+    val_transforms = get_val_transforms_kornia_resize(config)
     
     train_dataset = SegmentationDataset(train_dirs, train_transforms, config)
     val_dataset = SegmentationDataset(val_dirs, val_transforms, config)
@@ -812,7 +866,8 @@ def main():
     # # --- FASE 2: UNFREEZE ALL, FINE-TUNE ---
     tqdm.write("\n--- INIZIO FASE 2: FINE-TUNING DELL'INTERA RETE (ENCODER SCONGELATO) ---")
     model.segmentation_head.dropout.p = 0.15
-    train_loader.dataset.transform = get_train_transforms_kornia(config, aggressive_p=0.5) 
+    train_loader.dataset.transform = get_train_transforms_kornia_crop(config, aggressive_p=0.5) 
+    val_loader.dataset.transform = get_val_transforms_kornia_crop(config) 
 
     for param in model.encoder.parameters(): param.requires_grad = True
     optimizer = optim.AdamW(model.parameters(), lr=config["LR_FULL"]) #, weight_decay=config["WEIGHT_DECAY"])
@@ -855,11 +910,7 @@ def main():
     tqdm.write("\n--- INIZIO FASE 3: FINE-TUNING FINALE ---")
     fine_tune_optimizer = optim.AdamW(model.parameters(), lr=1e-5)
     model.segmentation_head.dropout.p = 0.0 
-    boundaryLoss = BoundaryLoss(
-        num_classes=config["NUM_CLASSES"],
-        ignore_index=config["IGNORE_INDEX"],
-        alpha=2.0
-    ).to(device)
+    boundaryLoss = BoundaryLoss(ignore_index=config["IGNORE_INDEX"]).to(device)
 
     def combined_loss(pred, target, feats=None):
         loss_ft = 0.35 * criterion_ft(pred, target) 
