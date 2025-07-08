@@ -515,9 +515,18 @@ def evaluate(model, loader, criterion, device, config, use_sliding = True) -> Tu
             total_loss += loss.item(); 
             
             if use_sliding:
-                preds = sliding_window_predict(model, images, patch=config["PATCH_SIZE"], stride=config["PATCH_STRIDE"], num_classes=config["NUM_CLASSES"])
+                preds = torch.cat([
+                    sliding_window_predict(
+                        model,
+                        images[i:i+1],                    # slice (1, C, H, W)
+                        config["PATCH_SIZE"],
+                        config["STRIDE_VAL"],
+                        config["NUM_CLASSES"]
+                    )
+                    for i in range(images.size(0))
+                ], dim=0)                                # torna (B, H, W)
             else:
-                preds = torch.argmax(outputs, dim=1)
+                preds = outputs.argmax(1)
 
             masks_flat, preds_flat = masks.flatten(), preds.flatten();
             valid = masks_flat != config["IGNORE_INDEX"]
