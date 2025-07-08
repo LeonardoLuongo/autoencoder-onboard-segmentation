@@ -44,7 +44,7 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 import matplotlib.pyplot as plt
 import seaborn as sns
-from lovasz import lovasz_softmax
+from segmentation_models_pytorch.losses import LovaszLoss
 import kornia.augmentation as K
 import kornia.geometry.transform as KGT
 from kornia.utils import image_to_tensor
@@ -943,22 +943,16 @@ def main():
     train_loader.dataset.transform = get_train_transforms_kornia_crop(config, disable=True)
     val_loader.dataset.transform = get_val_transforms_kornia_crop(config)
 
-    final_lambda = 10
-    counter = 0
+    criterion_lov = LovaszLoss(
+        mode='multiclass',
+        per_image=False,
+        ignore_index=config["IGNORE_INDEX"],
+        from_logits=True
+    ).to(device)
+
     def combined_loss(pred, target, feats=None, epoch=None):
-        nonlocal counter
-        lam = min(final_lambda, final_lambda * (epoch/10))
-        loss_ft = 0.35 * criterion_ft(pred, target) 
-        loss_lov = 0.65 * lovasz_softmax(F.softmax(pred, dim=1), target, ignore=config["IGNORE_INDEX"]) 
-        loss_bnd = lam * fast_boundary_loss(pred, target, ignore_index=config["IGNORE_INDEX"])
-        total_loss = loss_ft + loss_lov + loss_bnd
-        if counter < 100:
-            counter += 1
-            tqdm.write(f"Epoch {epoch+1}/{config['FINE_TUNING_EPOCHS']} - Loss FT: {loss_ft:.4f}, Loss Lovasz: {loss_lov:.4f}, Loss Boundary: {loss_bnd:.4f} (λ={lam:.2f})")
-            print(f"Bnd {loss_bnd/total_loss:.2%}  Lovasz {loss_lov/total_loss:.2%}  FT {loss_ft/total_loss:.2%}")
-
-
-        return total_loss
+        return (0.35 * criterion_ft(pred, target) +
+                0.65 * criterion_lov(pred, target))
     
     
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(fine_tune_optimizer, 'max', patience=3, factor=0.5, cooldown=1, min_lr=1e-7)
