@@ -246,7 +246,6 @@ def get_train_transforms_kornia(config, disable=False, aggressive_p=0.5):
             K.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.7),
             K.RandomGaussianBlur(kernel_size=(3, 5), sigma=(0.1, 2.0), p=0.4),
 
-            K.RandomErasing(p=0.5, scale=(0.02, 0.1)),
             K.RandomClahe(p=0.4), 
             K.RandomGamma(gamma=(0.7, 1.5), p=0.5),
 
@@ -264,12 +263,13 @@ def get_train_transforms_kornia(config, disable=False, aggressive_p=0.5):
 
 
 def get_val_transforms_kornia(config: Dict[str, Any]) -> torch.nn.Sequential:
-    """Pipeline di validazione Kornia (solo preprocessing)."""
     patch = config["PATCH_SIZE"]
     mean, std = config["MEAN"], config["STD"]
     
     return K.AugmentationSequential(
+        K.RandomCrop(size=patch, p=1.0, same_on_batch=False),
         K.Normalize(mean=torch.tensor(mean), std=torch.tensor(std)),
+        
         data_keys=['input', 'mask'],
         extra_args={DataKey.MASK: {"resample": Resample.NEAREST}},
     )
@@ -507,7 +507,7 @@ def train_one_epoch(model, loader, optimizer, scheduler, loss_function, scaler, 
         running_loss += loss.item(); progress_bar.set_postfix(loss=f"{loss.item():.4f}")
     return running_loss / len(loader)
 
-def evaluate(model, loader, criterion, device, config, use_sliding = True) -> Tuple[float, float, np.ndarray, np.ndarray]:
+def evaluate(model, loader, criterion, device, config, use_sliding = False) -> Tuple[float, float, np.ndarray, np.ndarray]:
     model.eval(); total_loss = 0.0; conf_matrix = torch.zeros(config["NUM_CLASSES"], config["NUM_CLASSES"], dtype=torch.int64, device=device)
     with torch.no_grad():
         for images, masks in tqdm(loader, desc="Validazione", leave=False):
@@ -704,30 +704,36 @@ from torch import nn
 from kornia.contrib import distance_transform
 
 class BoundaryLoss(nn.Module):
-    def __init__(self, num_classes: int,
-                 ignore_index: int = 0,
-                 alpha: float = 2.0):
+    """
+    Boundary Loss "Double-Sided" che penalizza errori sia interni che esterni.
+    """
+    def __init__(self, ignore_index=0):
         super().__init__()
-        self.C = num_classes
-        self.ignore = ignore_index
-        self.alpha = alpha
+        self.ignore_index = ignore_index
 
-    def forward(self, logits, target):
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         probs = torch.softmax(logits, dim=1)
-        B, _, H, W = probs.shape
-        losses = []
-        for c in range(self.C):
-            if c == self.ignore: continue
-            gt_c = (target == c).float().unsqueeze(1)
-            # distanza SOLO fuori dall’oggetto (come facevi)
-            dt = distance_transform(1.0 - gt_c)
-            dt = dt / (dt.max() + 1e-6)          # [0,1]
-            mask = (dt > 0)                      # banda esterna
-            losses.append(
-                (probs[:, c:c+1] * dt * mask).sum() /
-                (mask.sum() + 1e-6)
-            )
-        return torch.stack(losses).mean()
+        C = probs.shape[1]
+        
+        # Prepara il target one-hot
+        one_hot_targets = F.one_hot(targets, num_classes=C).permute(0, 3, 1, 2).float()
+        
+        with torch.no_grad():
+            # Distance Transform per la penalità esterna
+            gt_b_dt = distance_transform(1 - one_hot_targets)
+            # Distance Transform per la penalità interna
+            pred_b_dt = distance_transform(1 - (probs > 0.5).float())
+
+        # Calcola la loss
+        multiplied = probs * gt_b_dt + (1 - probs) * pred_b_dt
+        
+        # Applica la maschera di ignore_index
+        if self.ignore_index is not None:
+            mask = (targets != self.ignore_index).unsqueeze(1).expand_as(multiplied)
+            multiplied = multiplied * mask
+
+        return multiplied.mean()
+
 
 
 # =============================================================================
