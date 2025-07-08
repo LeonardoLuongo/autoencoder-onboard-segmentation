@@ -80,7 +80,7 @@ def get_config() -> Dict[str, Any]:
         "MODEL_SAVE_PATH": os.path.join(base_path, "best_model_b3.pth"),
 
         "ENCODER": "efficientnet-b3", "ENCODER_WEIGHTS": "imagenet",
-        "OUTPUT_SIZE": (384, 768), "BATCH_SIZE": 3, 
+        "PATCH_SIZE": (544, 512), "PATCH_STRIDE": (544, 256), "BATCH_SIZE": 3, 
         "NUM_CLASSES": 9, "IGNORE_INDEX": 0, "VALIDATION_SPLIT": 0.2,
 
         "FREEZE_EPOCHS": 7, "UNFREEZE_EPOCHS": 23, "FINE_TUNING_EPOCHS": 10,
@@ -89,6 +89,7 @@ def get_config() -> Dict[str, Any]:
         "CONTRASTIVE_TEMP": 0.1,      # τ dell’InfoNCE
         "CONTRASTIVE_MAX_SAMPLES": 4096*3,  # pixel da campionare per batch
         "CONTRASTIVE_W": 1,         # peso della loss rispetto alle loss di segmento
+
     }
     
     # FIX: Nomi delle classi anonimi come da richiesta
@@ -156,6 +157,9 @@ def load_or_compute_preprocessing(config: dict) -> dict:
         SegmentationDataset(train_dirs, get_cpu_transforms_kornia(config), config),
         config
     )
+    print("\nPesi calcolati per la loss (con boost per classi rare):")
+    for i, w in enumerate(class_weights):
+        print(f"  - Classe {i}: {w.item():.2f}")
 
     cache = {
         "dataset_version": dataset_sig,
@@ -208,43 +212,6 @@ def calculate_mean_std(loader: DataLoader) -> Tuple[np.ndarray, np.ndarray]:
     
     return mean_np, std_np
 
-def get_train_transforms(config: Dict[str, Any], aggressive_p: float = 0.5) -> A.Compose:
-    """Pipeline di augmentation AGGRESSIVA per risolvere le confusioni specifiche."""
-    
-    output_size = config["OUTPUT_SIZE"]
-    # mean, std = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225] # image net
-    mean, std = config["MEAN"], config["STD"]
-    return A.Compose([
-        # A.HorizontalFlip(p=0.5),
-        # A.VerticalFlip(p=aggressive_p/2),
-        # A.RandomRotate90(p=aggressive_p),
-        # A.RandomBrightnessContrast(p=0.7),
-        # A.RandomGamma(p=0.7),
-        # A.ColorJitter(p=0.7),
-        # A.GaussianBlur(blur_limit=(3, 5), p=0.4),
-        # # A.CoarseDropout(
-        # #     max_holes=16, 
-        # #     min_holes=8,
-        # #     max_height=32,
-        # #     min_height=16,
-        # #     max_width=32, 
-        # #     min_width=16,
-        # #     p=0.5
-        # # ),
-        A.Resize(height=config["OUTPUT_SIZE"][0], width=config["OUTPUT_SIZE"][1]),
-        A.Normalize(mean=mean, std=std),
-        ToTensorV2(),
-    ])
-
-def get_val_transforms(output_size: Tuple[int, int], mean: float, std: float) -> A.Compose:
-    """Pipeline di validazione (solo preprocessing)."""
-    return A.Compose([
-        A.Resize(height=output_size[0], width=output_size[1], interpolation=cv2.INTER_NEAREST),
-        A.Normalize(mean=mean, std=std),
-        ToTensorV2(),
-    ])
-
-
 
 
 
@@ -252,11 +219,11 @@ def get_val_transforms(output_size: Tuple[int, int], mean: float, std: float) ->
 from kornia.constants import DataKey, Resample
 
 def get_train_transforms_kornia(config, disable=False, aggressive_p=0.5):
-    output_size = config["OUTPUT_SIZE"]
+    patch = config["PATCH_SIZE"]
     mean, std = config["MEAN"], config["STD"]
     if disable:
         return K.AugmentationSequential(
-            K.Resize(size=output_size),
+            K.RandomCrop(size=patch, p=1.0),
             K.Normalize(mean=torch.tensor(mean), std=torch.tensor(std)),
 
             data_keys=["input", "mask"],
@@ -270,6 +237,8 @@ def get_train_transforms_kornia(config, disable=False, aggressive_p=0.5):
         )
     else:
         return K.AugmentationSequential(
+            K.RandomCrop(size=patch, p=1.0),
+
             # --- augmentations ---
             K.RandomHorizontalFlip(p=0.5),
             K.RandomVerticalFlip(p=aggressive_p / 2),
@@ -281,7 +250,6 @@ def get_train_transforms_kornia(config, disable=False, aggressive_p=0.5):
             K.RandomClahe(p=0.4), 
             K.RandomGamma(gamma=(0.7, 1.5), p=0.5),
 
-            K.Resize(size=output_size),
             K.Normalize(mean=torch.tensor(mean), std=torch.tensor(std)),
 
             data_keys=["input", "mask"],
@@ -297,23 +265,18 @@ def get_train_transforms_kornia(config, disable=False, aggressive_p=0.5):
 
 def get_val_transforms_kornia(config: Dict[str, Any]) -> torch.nn.Sequential:
     """Pipeline di validazione Kornia (solo preprocessing)."""
-    output_size = config["OUTPUT_SIZE"]
+    patch = config["PATCH_SIZE"]
     mean, std = config["MEAN"], config["STD"]
     
     return K.AugmentationSequential(
-        K.Resize(size=(output_size[0], output_size[1])),
         K.Normalize(mean=torch.tensor(mean), std=torch.tensor(std)),
-        
         data_keys=['input', 'mask'],
-        extra_args={
-            K.Resize: {"interpolation": "nearest", "align_corners": None}
-        },
-        same_on_batch=False
+        extra_args={DataKey.MASK: {"resample": Resample.NEAREST}},
     )
 
 def get_cpu_transforms_kornia(config: Dict[str, Any]) -> torch.nn.Sequential:
     """Pipeline Kornia minimale per il calcolo delle statistiche (solo resize)."""
-    output_size = config["OUTPUT_SIZE"]
+    output_size = config["PATCH_SIZE"]
 
     return K.AugmentationSequential(
         K.Resize(size=(output_size[0], output_size[1])),
@@ -423,9 +386,6 @@ def calculate_class_weights(dataset: Dataset, config: Dict[str, Any]) -> torch.T
     weights = np.clip(weights, a_min=None, a_max=30.0)   # clamp prima
     weights_tensor = torch.tensor(weights, dtype=torch.float).to(config["DEVICE"])
     
-    print("\nPesi calcolati per la loss (con boost per classi rare):")
-    for i, w in enumerate(weights_tensor):
-        print(f"  - Classe {i}: {w.item():.2f}")
     return weights_tensor
 
 
@@ -472,6 +432,27 @@ class UNetWithDropout(nn.Module):
         x = self.segmentation_head(x)  # conv finale
         return x
 
+
+def sliding_window_predict(model, image, patch, stride, num_classes):
+    _, _, H, W = image.shape
+    ph, pw = patch
+    sh, sw = stride
+    device = image.device
+
+    prob_sum  = torch.zeros((1, num_classes, H, W), device=device)
+    count_map = torch.zeros((1, 1,          H, W), device=device)
+
+    for y in range(0, H - ph + 1, sh):
+        for x in range(0, W - pw + 1, sw):
+            patch_img = image[:, :, y:y+ph, x:x+pw]
+            with torch.no_grad(), autocast(enabled=False):
+                logits = model(patch_img)           # (1,C,ph,pw)
+                prob   = torch.softmax(logits, 1)
+            prob_sum[:, :, y:y+ph, x:x+pw] += prob
+            count_map[:, :, y:y+ph, x:x+pw] += 1
+
+    prob_avg = prob_sum / count_map.clamp_min(1)
+    return prob_avg.argmax(1)                       # (1,H,W)
 
 
 
@@ -523,16 +504,25 @@ def train_one_epoch(model, loader, optimizer, scheduler, loss_function, scaler, 
         running_loss += loss.item(); progress_bar.set_postfix(loss=f"{loss.item():.4f}")
     return running_loss / len(loader)
 
-def evaluate(model, loader, criterion, device, config) -> Tuple[float, float, np.ndarray, np.ndarray]:
+def evaluate(model, loader, criterion, device, config, use_sliding = True) -> Tuple[float, float, np.ndarray, np.ndarray]:
     model.eval(); total_loss = 0.0; conf_matrix = torch.zeros(config["NUM_CLASSES"], config["NUM_CLASSES"], dtype=torch.int64, device=device)
     with torch.no_grad():
         for images, masks in tqdm(loader, desc="Validazione", leave=False):
             images, masks = images.to(device), masks.to(device, dtype=torch.long)
             with autocast(enabled=True, device_type=device.type if device.type=='cuda' else 'cpu'):
-                outputs = model(images); loss = criterion(outputs, masks)
-            total_loss += loss.item(); preds = torch.argmax(outputs, dim=1)
-            masks_flat, preds_flat = masks.flatten(), preds.flatten(); valid = masks_flat != config["IGNORE_INDEX"]
-            indices = masks_flat[valid] * config["NUM_CLASSES"] + preds_flat[valid]; conf_matrix += torch.bincount(indices, minlength=config["NUM_CLASSES"]**2).reshape(config["NUM_CLASSES"], config["NUM_CLASSES"])
+                outputs = model(images); 
+                loss = criterion(outputs, masks)
+            total_loss += loss.item(); 
+            
+            if use_sliding:
+                preds = sliding_window_predict(model, images, patch=config["PATCH_SIZE"], stride=config["PATCH_STRIDE"], num_classes=config["NUM_CLASSES"])
+            else:
+                preds = torch.argmax(outputs, dim=1)
+
+            masks_flat, preds_flat = masks.flatten(), preds.flatten();
+            valid = masks_flat != config["IGNORE_INDEX"]
+            indices = masks_flat[valid] * config["NUM_CLASSES"] + preds_flat[valid]; 
+            conf_matrix += torch.bincount(indices, minlength=config["NUM_CLASSES"]**2).reshape(config["NUM_CLASSES"], config["NUM_CLASSES"])
     tp = torch.diag(conf_matrix); fp = conf_matrix.sum(axis=0) - tp; fn = conf_matrix.sum(axis=1) - tp
     iou_per_class = (tp / (tp + fp + fn + 1e-6)).cpu().numpy()
     mean_iou = np.nanmean(iou_per_class[config["IGNORE_INDEX"]+1:]) if config["IGNORE_INDEX"] is not None else np.nanmean(iou_per_class)
@@ -772,6 +762,7 @@ def main():
 
     def combined_loss(pred, target, feats=None):
         return 0.8 * criterion_ft(pred, target) + 0.2 * criterion_wce(pred, target)
+    
 
     best_iou = -1.0; best_conf_matrix = None; global_epoch = 0
 
@@ -808,7 +799,21 @@ def main():
     for param in model.encoder.parameters(): param.requires_grad = True
     optimizer = optim.AdamW(model.parameters(), lr=config["LR_FULL"]) #, weight_decay=config["WEIGHT_DECAY"])
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5, cooldown=1, min_lr=1e-7)
-            
+
+    ##########################################################
+    # LOSS pixel_contrast     
+    # def combined_loss(pred, target, feats=None):
+    #     if feats is not None:
+    #         # Training con Pixel Contrastive Loss
+    #         mask_ds = F.interpolate(
+    #             target.unsqueeze(1).float(),
+    #             size=feats.shape[2:], mode="nearest"
+    #         ).squeeze(1).long()
+    #         return 0.8 * criterion_ft(pred, target) + 0.2 * criterion_wce(pred, target) + 5 * pixel_contrast(feats, mask_ds) * config["CONTRASTIVE_WEIGHT"]
+    #     else:
+    #         # Evaluation
+    #         return 0.8 * criterion_ft(pred, target) + 0.2 * criterion_wce(pred, target)
+    ##########################################################
 
     for epoch in range(config["UNFREEZE_EPOCHS"]):
         global_epoch += 1; tqdm.write(f"\n--- Fase 2 / Epoch {epoch+1}/{config['UNFREEZE_EPOCHS']} (Global: {global_epoch}) ---")
@@ -875,4 +880,3 @@ def main():
 # =============================================================================
 if __name__ == "__main__":
     main()
-
