@@ -891,3 +891,465 @@ def main():
 # =============================================================================
 if __name__ == "__main__":
     main()
+
+'''
+
+> & "C:/Program Files/Python312/python.exe" "d:/MLPoject-Git/autoencoder-onboard-segmentation/local_execution/Leo/old/7 - All_in_1.py"
+Cache trovata e valida — salto il preprocessing.
+Device: cuda | Mixed Precision: True
+Strategia Finale: efficientnet-b3 con Augmentation Mirata
+Creazione del modello: U-Net con encoder 'efficientnet-b3'
+Parametri addestrabili: 13,160,193
+
+--- INIZIO FASE 1: TRAINING DEL DECODER (ENCODER CONGELATO) ---
+
+--- Fase 1 / Epoch 1/7 (Global: 1) ---
+Risultati Epoch 1: Train Loss: 0.8228 | Val Loss: 0.7001 | Val mIoU: 0.3263
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.3263 <<<
+
+--- Fase 1 / Epoch 2/7 (Global: 2) ---
+Risultati Epoch 2: Train Loss: 0.7023 | Val Loss: 0.6636 | Val mIoU: 0.3286                                                                                        
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.3286 <<<
+
+--- Fase 1 / Epoch 3/7 (Global: 3) ---
+Risultati Epoch 3: Train Loss: 0.6740 | Val Loss: 0.6426 | Val mIoU: 0.3287                                                                                        
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.3287 <<<
+
+--- Fase 1 / Epoch 4/7 (Global: 4) ---
+Risultati Epoch 4: Train Loss: 0.6369 | Val Loss: 0.6136 | Val mIoU: 0.3892                                                                                        
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.3892 <<<
+
+--- Fase 1 / Epoch 5/7 (Global: 5) ---
+Risultati Epoch 5: Train Loss: 0.6230 | Val Loss: 0.5957 | Val mIoU: 0.4109                                                                                        
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.4109 <<<
+
+--- Fase 1 / Epoch 6/7 (Global: 6) ---
+Risultati Epoch 6: Train Loss: 0.6099 | Val Loss: 0.5962 | Val mIoU: 0.4029                                                                                        
+
+--- Fase 1 / Epoch 7/7 (Global: 7) ---
+Risultati Epoch 7: Train Loss: 0.5867 | Val Loss: 0.5742 | Val mIoU: 0.4296                                                                                        
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.4296 <<<
+
+--- INIZIO FASE 2: FINE-TUNING DELL'INTERA RETE (ENCODER SCONGELATO) ---
+
+--- Fase 2 / Epoch 1/23 (Global: 8) ---
+Risultati Epoch 8: Train Loss: 0.7193 | Val Loss: 0.5485 | Val mIoU: 0.4604                                                                                        
+    - Classe 1 (Classe 1): 0.4045
+    - Classe 2 (Classe 2): 0.2824
+    - Classe 3 (Classe 3): 0.4576
+    - Classe 4 (Classe 4): 0.3574
+    - Classe 5 (Classe 5): 0.5902
+    - Classe 6 (Classe 6): 0.2486
+    - Classe 7 (Classe 7): 0.4547
+    - Classe 8 (Classe 8): 0.8880
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.4604 <<<
+
+--- Fase 2 / Epoch 2/23 (Global: 9) ---
+Risultati Epoch 9: Train Loss: 0.6768 | Val Loss: 0.5326 | Val mIoU: 0.4843                                                                                        
+    - Classe 1 (Classe 1): 0.4323
+    - Classe 2 (Classe 2): 0.2200
+    - Classe 3 (Classe 3): 0.4436
+    - Classe 4 (Classe 4): 0.4042
+    - Classe 5 (Classe 5): 0.5958
+    - Classe 6 (Classe 6): 0.2866
+    - Classe 7 (Classe 7): 0.5920
+    - Classe 8 (Classe 8): 0.8996
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.4843 <<<
+
+--- Fase 2 / Epoch 3/23 (Global: 10) ---
+Risultati Epoch 10: Train Loss: 0.6560 | Val Loss: 0.5104 | Val mIoU: 0.5191                                                                                       
+    - Classe 1 (Classe 1): 0.4277
+    - Classe 2 (Classe 2): 0.3218
+    - Classe 3 (Classe 3): 0.4666
+    - Classe 4 (Classe 4): 0.4560
+    - Classe 5 (Classe 5): 0.6301
+    - Classe 6 (Classe 6): 0.3159
+    - Classe 7 (Classe 7): 0.6402
+    - Classe 8 (Classe 8): 0.8948
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.5191 <<<
+
+--- Fase 2 / Epoch 4/23 (Global: 11) ---
+Risultati Epoch 11: Train Loss: 0.6451 | Val Loss: 0.5080 | Val mIoU: 0.5217                                                                                       
+    - Classe 1 (Classe 1): 0.3508
+    - Classe 2 (Classe 2): 0.3373
+    - Classe 3 (Classe 3): 0.5000
+    - Classe 4 (Classe 4): 0.5330
+    - Classe 5 (Classe 5): 0.6342
+    - Classe 6 (Classe 6): 0.2960
+    - Classe 7 (Classe 7): 0.6226
+    - Classe 8 (Classe 8): 0.8995
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.5217 <<<
+
+--- Fase 2 / Epoch 5/23 (Global: 12) ---
+Risultati Epoch 12: Train Loss: 0.6199 | Val Loss: 0.5047 | Val mIoU: 0.5249                                                                                       
+    - Classe 1 (Classe 1): 0.4254
+    - Classe 2 (Classe 2): 0.3724
+    - Classe 3 (Classe 3): 0.5135
+    - Classe 4 (Classe 4): 0.5240
+    - Classe 5 (Classe 5): 0.6480
+    - Classe 6 (Classe 6): 0.2874
+    - Classe 7 (Classe 7): 0.5386
+    - Classe 8 (Classe 8): 0.8900
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.5249 <<<
+
+--- Fase 2 / Epoch 6/23 (Global: 13) ---
+Risultati Epoch 13: Train Loss: 0.6081 | Val Loss: 0.5070 | Val mIoU: 0.5443                                                                                       
+    - Classe 1 (Classe 1): 0.4852
+    - Classe 2 (Classe 2): 0.4152
+    - Classe 3 (Classe 3): 0.5117
+    - Classe 4 (Classe 4): 0.4329
+    - Classe 5 (Classe 5): 0.6389
+    - Classe 6 (Classe 6): 0.3289
+    - Classe 7 (Classe 7): 0.6587
+    - Classe 8 (Classe 8): 0.8827
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.5443 <<<
+
+--- Fase 2 / Epoch 7/23 (Global: 14) ---
+Risultati Epoch 14: Train Loss: 0.5962 | Val Loss: 0.4935 | Val mIoU: 0.5702                                                                                       
+    - Classe 1 (Classe 1): 0.4990
+    - Classe 2 (Classe 2): 0.3914
+    - Classe 3 (Classe 3): 0.5306
+    - Classe 4 (Classe 4): 0.5184
+    - Classe 5 (Classe 5): 0.6887
+    - Classe 6 (Classe 6): 0.3442
+    - Classe 7 (Classe 7): 0.6877
+    - Classe 8 (Classe 8): 0.9012
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.5702 <<<
+
+--- Fase 2 / Epoch 8/23 (Global: 15) ---
+Risultati Epoch 15: Train Loss: 0.5833 | Val Loss: 0.4964 | Val mIoU: 0.5917                                                                                       
+    - Classe 1 (Classe 1): 0.5339
+    - Classe 2 (Classe 2): 0.4064
+    - Classe 3 (Classe 3): 0.5257
+    - Classe 4 (Classe 4): 0.5816
+    - Classe 5 (Classe 5): 0.7057
+    - Classe 6 (Classe 6): 0.3755
+    - Classe 7 (Classe 7): 0.7072
+    - Classe 8 (Classe 8): 0.8975
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.5917 <<<
+
+--- Fase 2 / Epoch 9/23 (Global: 16) ---
+Risultati Epoch 16: Train Loss: 0.5798 | Val Loss: 0.4887 | Val mIoU: 0.5857                                                                                       
+    - Classe 1 (Classe 1): 0.5226
+    - Classe 2 (Classe 2): 0.4326
+    - Classe 3 (Classe 3): 0.5146
+    - Classe 4 (Classe 4): 0.5116
+    - Classe 5 (Classe 5): 0.7338
+    - Classe 6 (Classe 6): 0.3640
+    - Classe 7 (Classe 7): 0.7053
+    - Classe 8 (Classe 8): 0.9012
+
+--- Fase 2 / Epoch 10/23 (Global: 17) ---
+Risultati Epoch 17: Train Loss: 0.5674 | Val Loss: 0.4812 | Val mIoU: 0.5932                                                                                       
+    - Classe 1 (Classe 1): 0.5430
+    - Classe 2 (Classe 2): 0.3824
+    - Classe 3 (Classe 3): 0.5657
+    - Classe 4 (Classe 4): 0.5594
+    - Classe 5 (Classe 5): 0.7672
+    - Classe 6 (Classe 6): 0.3640
+    - Classe 7 (Classe 7): 0.6801
+    - Classe 8 (Classe 8): 0.8837
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.5932 <<<
+
+--- Fase 2 / Epoch 11/23 (Global: 18) ---
+Risultati Epoch 18: Train Loss: 0.5494 | Val Loss: 0.4841 | Val mIoU: 0.6188                                                                                       
+    - Classe 1 (Classe 1): 0.5620
+    - Classe 2 (Classe 2): 0.4377
+    - Classe 3 (Classe 3): 0.5521
+    - Classe 4 (Classe 4): 0.6562
+    - Classe 5 (Classe 5): 0.7335
+    - Classe 6 (Classe 6): 0.3878
+    - Classe 7 (Classe 7): 0.7255
+    - Classe 8 (Classe 8): 0.8955
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.6188 <<<
+
+--- Fase 2 / Epoch 12/23 (Global: 19) ---
+Risultati Epoch 19: Train Loss: 0.5484 | Val Loss: 0.4930 | Val mIoU: 0.5985                                                                                       
+    - Classe 1 (Classe 1): 0.5395
+    - Classe 2 (Classe 2): 0.4446
+    - Classe 3 (Classe 3): 0.5664
+    - Classe 4 (Classe 4): 0.5078
+    - Classe 5 (Classe 5): 0.7635
+    - Classe 6 (Classe 6): 0.3685
+    - Classe 7 (Classe 7): 0.7063
+    - Classe 8 (Classe 8): 0.8915
+
+--- Fase 2 / Epoch 13/23 (Global: 20) ---
+Risultati Epoch 20: Train Loss: 0.5485 | Val Loss: 0.4740 | Val mIoU: 0.6158                                                                                       
+    - Classe 1 (Classe 1): 0.5659
+    - Classe 2 (Classe 2): 0.4649
+    - Classe 3 (Classe 3): 0.5464
+    - Classe 4 (Classe 4): 0.6150
+    - Classe 5 (Classe 5): 0.7589
+    - Classe 6 (Classe 6): 0.3643
+    - Classe 7 (Classe 7): 0.7126
+    - Classe 8 (Classe 8): 0.8987
+
+--- Fase 2 / Epoch 14/23 (Global: 21) ---
+Risultati Epoch 21: Train Loss: 0.5295 | Val Loss: 0.4864 | Val mIoU: 0.6141                                                                                       
+    - Classe 1 (Classe 1): 0.5780
+    - Classe 2 (Classe 2): 0.4539
+    - Classe 3 (Classe 3): 0.5235
+    - Classe 4 (Classe 4): 0.5936
+    - Classe 5 (Classe 5): 0.7580
+    - Classe 6 (Classe 6): 0.3858
+    - Classe 7 (Classe 7): 0.7216
+    - Classe 8 (Classe 8): 0.8987
+
+--- Fase 2 / Epoch 15/23 (Global: 22) ---
+Risultati Epoch 22: Train Loss: 0.5397 | Val Loss: 0.4925 | Val mIoU: 0.6206                                                                                       
+    - Classe 1 (Classe 1): 0.5699
+    - Classe 2 (Classe 2): 0.4493
+    - Classe 3 (Classe 3): 0.5922
+    - Classe 4 (Classe 4): 0.5803
+    - Classe 5 (Classe 5): 0.7420
+    - Classe 6 (Classe 6): 0.3693
+    - Classe 7 (Classe 7): 0.7595
+    - Classe 8 (Classe 8): 0.9021
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.6206 <<<
+
+--- Fase 2 / Epoch 16/23 (Global: 23) ---
+Risultati Epoch 23: Train Loss: 0.5285 | Val Loss: 0.5036 | Val mIoU: 0.6207                                                                                       
+    - Classe 1 (Classe 1): 0.5868
+    - Classe 2 (Classe 2): 0.4819
+    - Classe 3 (Classe 3): 0.5214
+    - Classe 4 (Classe 4): 0.6304
+    - Classe 5 (Classe 5): 0.7560
+    - Classe 6 (Classe 6): 0.3562
+    - Classe 7 (Classe 7): 0.7372
+    - Classe 8 (Classe 8): 0.8956
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.6207 <<<
+
+--- Fase 2 / Epoch 17/23 (Global: 24) ---
+Risultati Epoch 24: Train Loss: 0.5289 | Val Loss: 0.5089 | Val mIoU: 0.6167                                                                                       
+    - Classe 1 (Classe 1): 0.5607
+    - Classe 2 (Classe 2): 0.4678
+    - Classe 3 (Classe 3): 0.5838
+    - Classe 4 (Classe 4): 0.6121
+    - Classe 5 (Classe 5): 0.7442
+    - Classe 6 (Classe 6): 0.3403
+    - Classe 7 (Classe 7): 0.7279
+    - Classe 8 (Classe 8): 0.8965
+
+--- Fase 2 / Epoch 18/23 (Global: 25) ---
+Risultati Epoch 25: Train Loss: 0.5178 | Val Loss: 0.4925 | Val mIoU: 0.6235                                                                                       
+    - Classe 1 (Classe 1): 0.5852
+    - Classe 2 (Classe 2): 0.4518
+    - Classe 3 (Classe 3): 0.5581
+    - Classe 4 (Classe 4): 0.6137
+    - Classe 5 (Classe 5): 0.7608
+    - Classe 6 (Classe 6): 0.3750
+    - Classe 7 (Classe 7): 0.7459
+    - Classe 8 (Classe 8): 0.8977
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.6235 <<<
+
+--- Fase 2 / Epoch 19/23 (Global: 26) ---
+Risultati Epoch 26: Train Loss: 0.5135 | Val Loss: 0.4935 | Val mIoU: 0.6298                                                                                       
+    - Classe 1 (Classe 1): 0.6063
+    - Classe 2 (Classe 2): 0.4655
+    - Classe 3 (Classe 3): 0.5733
+    - Classe 4 (Classe 4): 0.5864
+    - Classe 5 (Classe 5): 0.7661
+    - Classe 6 (Classe 6): 0.3836
+    - Classe 7 (Classe 7): 0.7603
+    - Classe 8 (Classe 8): 0.8974
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.6298 <<<
+
+--- Fase 2 / Epoch 20/23 (Global: 27) ---
+Risultati Epoch 27: Train Loss: 0.4968 | Val Loss: 0.5577 | Val mIoU: 0.6426                                                                                       
+    - Classe 1 (Classe 1): 0.6191
+    - Classe 2 (Classe 2): 0.5051
+    - Classe 3 (Classe 3): 0.6173
+    - Classe 4 (Classe 4): 0.6430
+    - Classe 5 (Classe 5): 0.7943
+    - Classe 6 (Classe 6): 0.3129
+    - Classe 7 (Classe 7): 0.7610
+    - Classe 8 (Classe 8): 0.8882
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.6426 <<<
+
+--- Fase 2 / Epoch 21/23 (Global: 28) ---
+Risultati Epoch 28: Train Loss: 0.5000 | Val Loss: 0.4913 | Val mIoU: 0.6320                                                                                       
+    - Classe 1 (Classe 1): 0.5948
+    - Classe 2 (Classe 2): 0.4442
+    - Classe 3 (Classe 3): 0.5555
+    - Classe 4 (Classe 4): 0.6574
+    - Classe 5 (Classe 5): 0.7719
+    - Classe 6 (Classe 6): 0.3897
+    - Classe 7 (Classe 7): 0.7463
+    - Classe 8 (Classe 8): 0.8963
+
+--- Fase 2 / Epoch 22/23 (Global: 29) ---
+Risultati Epoch 29: Train Loss: 0.4949 | Val Loss: 0.5253 | Val mIoU: 0.6316                                                                                       
+    - Classe 1 (Classe 1): 0.5214
+    - Classe 2 (Classe 2): 0.4878
+    - Classe 3 (Classe 3): 0.6182
+    - Classe 4 (Classe 4): 0.6574
+    - Classe 5 (Classe 5): 0.7468
+    - Classe 6 (Classe 6): 0.3724
+    - Classe 7 (Classe 7): 0.7600
+    - Classe 8 (Classe 8): 0.8890
+
+--- Fase 2 / Epoch 23/23 (Global: 30) ---
+Risultati Epoch 30: Train Loss: 0.4891 | Val Loss: 0.5186 | Val mIoU: 0.6391                                                                                       
+    - Classe 1 (Classe 1): 0.6007
+    - Classe 2 (Classe 2): 0.4840
+    - Classe 3 (Classe 3): 0.5828
+    - Classe 4 (Classe 4): 0.6358
+    - Classe 5 (Classe 5): 0.7734
+    - Classe 6 (Classe 6): 0.3852
+    - Classe 7 (Classe 7): 0.7539
+    - Classe 8 (Classe 8): 0.8971
+
+--- INIZIO FASE 3: FINE-TUNING FINALE ---
+
+--- Fase 3 / Epoch 1/10 (Global: 31) ---
+Risultati Epoch 31: Train Loss: 0.3364 | Val Loss: 0.3516 | Val mIoU: 0.6671                                                                                       
+    - Classe 1 (Classe 1): 0.6153
+    - Classe 2 (Classe 2): 0.5135
+    - Classe 3 (Classe 3): 0.5979
+    - Classe 4 (Classe 4): 0.7845
+    - Classe 5 (Classe 5): 0.7880
+    - Classe 6 (Classe 6): 0.3466
+    - Classe 7 (Classe 7): 0.7877
+    - Classe 8 (Classe 8): 0.9031
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.6671 <<<
+
+--- Fase 3 / Epoch 2/10 (Global: 32) ---
+Risultati Epoch 32: Train Loss: 0.3200 | Val Loss: 0.3498 | Val mIoU: 0.6651                                                                                       
+    - Classe 1 (Classe 1): 0.6140
+    - Classe 2 (Classe 2): 0.5166
+    - Classe 3 (Classe 3): 0.5682
+    - Classe 4 (Classe 4): 0.7805
+    - Classe 5 (Classe 5): 0.7966
+    - Classe 6 (Classe 6): 0.3497
+    - Classe 7 (Classe 7): 0.7920
+    - Classe 8 (Classe 8): 0.9034
+
+--- Fase 3 / Epoch 3/10 (Global: 33) ---
+Risultati Epoch 33: Train Loss: 0.3180 | Val Loss: 0.3467 | Val mIoU: 0.6678                                                                                       
+    - Classe 1 (Classe 1): 0.6225
+    - Classe 2 (Classe 2): 0.5187
+    - Classe 3 (Classe 3): 0.5770
+    - Classe 4 (Classe 4): 0.7829
+    - Classe 5 (Classe 5): 0.7918
+    - Classe 6 (Classe 6): 0.3510
+    - Classe 7 (Classe 7): 0.7932
+    - Classe 8 (Classe 8): 0.9051
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.6678 <<<
+
+--- Fase 3 / Epoch 4/10 (Global: 34) ---
+Risultati Epoch 34: Train Loss: 0.3119 | Val Loss: 0.3442 | Val mIoU: 0.6681                                                                                       
+    - Classe 1 (Classe 1): 0.6222
+    - Classe 2 (Classe 2): 0.5207
+    - Classe 3 (Classe 3): 0.5637
+    - Classe 4 (Classe 4): 0.7868
+    - Classe 5 (Classe 5): 0.8037
+    - Classe 6 (Classe 6): 0.3469
+    - Classe 7 (Classe 7): 0.7956
+    - Classe 8 (Classe 8): 0.9047
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.6681 <<<
+
+--- Fase 3 / Epoch 5/10 (Global: 35) ---
+Risultati Epoch 35: Train Loss: 0.3044 | Val Loss: 0.3424 | Val mIoU: 0.6711                                                                                       
+    - Classe 1 (Classe 1): 0.6300
+    - Classe 2 (Classe 2): 0.5260
+    - Classe 3 (Classe 3): 0.5914
+    - Classe 4 (Classe 4): 0.7908
+    - Classe 5 (Classe 5): 0.7965
+    - Classe 6 (Classe 6): 0.3319
+    - Classe 7 (Classe 7): 0.7977
+    - Classe 8 (Classe 8): 0.9045
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.6711 <<<
+
+--- Fase 3 / Epoch 6/10 (Global: 36) ---
+Risultati Epoch 36: Train Loss: 0.3071 | Val Loss: 0.3425 | Val mIoU: 0.6732                                                                                       
+    - Classe 1 (Classe 1): 0.6354
+    - Classe 2 (Classe 2): 0.5254
+    - Classe 3 (Classe 3): 0.6040
+    - Classe 4 (Classe 4): 0.7848
+    - Classe 5 (Classe 5): 0.8018
+    - Classe 6 (Classe 6): 0.3319
+    - Classe 7 (Classe 7): 0.7962
+    - Classe 8 (Classe 8): 0.9065
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.6732 <<<
+
+--- Fase 3 / Epoch 7/10 (Global: 37) ---
+Risultati Epoch 37: Train Loss: 0.2881 | Val Loss: 0.3410 | Val mIoU: 0.6738                                                                                       
+    - Classe 1 (Classe 1): 0.6286
+    - Classe 2 (Classe 2): 0.5251
+    - Classe 3 (Classe 3): 0.5961
+    - Classe 4 (Classe 4): 0.7964
+    - Classe 5 (Classe 5): 0.8022
+    - Classe 6 (Classe 6): 0.3399
+    - Classe 7 (Classe 7): 0.7970
+    - Classe 8 (Classe 8): 0.9047
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.6738 <<<
+
+--- Fase 3 / Epoch 8/10 (Global: 38) ---
+Risultati Epoch 38: Train Loss: 0.2876 | Val Loss: 0.3406 | Val mIoU: 0.6725                                                                                       
+    - Classe 1 (Classe 1): 0.6336
+    - Classe 2 (Classe 2): 0.5245
+    - Classe 3 (Classe 3): 0.5952
+    - Classe 4 (Classe 4): 0.8068
+    - Classe 5 (Classe 5): 0.8055
+    - Classe 6 (Classe 6): 0.3086
+    - Classe 7 (Classe 7): 0.7992
+    - Classe 8 (Classe 8): 0.9064
+
+--- Fase 3 / Epoch 9/10 (Global: 39) ---
+Risultati Epoch 39: Train Loss: 0.2826 | Val Loss: 0.3415 | Val mIoU: 0.6718                                                                                       
+    - Classe 1 (Classe 1): 0.6366
+    - Classe 2 (Classe 2): 0.5236
+    - Classe 3 (Classe 3): 0.6019
+    - Classe 4 (Classe 4): 0.8032
+    - Classe 5 (Classe 5): 0.8006
+    - Classe 6 (Classe 6): 0.3100
+    - Classe 7 (Classe 7): 0.7952
+    - Classe 8 (Classe 8): 0.9033
+
+--- Fase 3 / Epoch 10/10 (Global: 40) ---
+Risultati Epoch 40: Train Loss: 0.2806 | Val Loss: 0.3384 | Val mIoU: 0.6739                                                                                       
+    - Classe 1 (Classe 1): 0.6369
+    - Classe 2 (Classe 2): 0.5240
+    - Classe 3 (Classe 3): 0.6025
+    - Classe 4 (Classe 4): 0.7845
+    - Classe 5 (Classe 5): 0.8137
+    - Classe 6 (Classe 6): 0.3230
+    - Classe 7 (Classe 7): 0.7984
+    - Classe 8 (Classe 8): 0.9084
+
+>>> 🎉 Nuovo modello migliore salvato! mIoU: 0.6739 <<<
+
+--- Training Completato ---
+Miglior mIoU di validazione ottenuto: 0.6739
+Visualizzazione e salvataggio Matrice di Confusione...
+Matrice di confusione salvata in 'confusion_matrix_best.png's
+
+'''
