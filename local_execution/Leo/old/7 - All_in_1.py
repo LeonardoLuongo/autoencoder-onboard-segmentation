@@ -50,8 +50,7 @@ import kornia.geometry.transform as KGT
 from kornia.utils import image_to_tensor
 import torch
 from segmentation_models_pytorch import base as smp_base
-from segmentation_pytorch.losses.boundary import BoundaryLoss
-# semantic-segmentation-pytorch
+from monai.losses import HausdorffDTLoss
 
 # =============================================================================
 # 2. RIPRODUCIBILITÀ
@@ -755,16 +754,19 @@ def main():
     tqdm.write("\n--- INIZIO FASE 3: FINE-TUNING FINALE ---")
     fine_tune_optimizer = optim.AdamW(model.parameters(), lr=1e-5)
     model.segmentation_head.dropout.p = 0.0 
-    boundary_loss_fn = BoundaryLoss(ignore_index=config["IGNORE_INDEX"]).to(device)
+    hausdorff_loss_fn = HausdorffDTLoss(
+        softmax=True,          # Applica la softmax internamente
+        to_onehot_y=True,      # Converte il target in one-hot internamente
+        include_background=False # Importantissimo: IGNORA la classe 0, il nostro ignore_index
+    ).to(device)
+
     def combined_loss(pred, target, feats=None):
 
-        loss_ft = 0.2 * criterion_ft(pred, target) 
-        loss_lov = 0.7 * lovasz_softmax(F.softmax(pred, dim=1), target, ignore=config["IGNORE_INDEX"]) 
-        loss_boundary = 0.1 * boundary_loss_fn(pred, target)
-        
-        print(f"\n[DIAGNOSTICA LOSS] Lovasz: {loss_lov.item():.4f} | FocalTversky: {loss_ft.item():.4f} | Boundary: {loss_boundary.item():.4f}")
+        loss_ft = 0.25 * criterion_ft(pred, target) 
+        loss_lov = 0.65 * lovasz_softmax(F.softmax(pred, dim=1), target, ignore=config["IGNORE_INDEX"]) 
+        loss_hau = 0.1 * hausdorff_loss_fn(pred, target)
 
-        return loss_ft + loss_lov + loss_boundary
+        return loss_ft + loss_lov + loss_hau
 
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(fine_tune_optimizer, 'max', patience=3, factor=0.5, cooldown=1, min_lr=1e-7)
 
