@@ -453,7 +453,7 @@ class UNetWithDropout(nn.Module):
 
     def forward(self, x):
         feats = self.encoder(x)        # lista feature maps
-        x = self.decoder(*feats)       # decoder
+        x = self.decoder(feats)       # decoder
         x = self.extra_dropout(x)      # regolarizzazione
         x = self.segmentation_head(x)  # conv finale
         return x
