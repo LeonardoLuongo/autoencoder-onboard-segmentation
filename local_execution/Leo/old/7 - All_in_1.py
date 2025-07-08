@@ -156,6 +156,9 @@ def load_or_compute_preprocessing(config: dict) -> dict:
         SegmentationDataset(train_dirs, get_cpu_transforms_kornia(config), config),
         config
     )
+    print("\nPesi calcolati per la loss (con boost per classi rare):")
+    for i, w in enumerate(class_weights):
+        print(f"  - Classe {i}: {w.item():.2f}")
 
     cache = {
         "dataset_version": dataset_sig,
@@ -423,9 +426,6 @@ def calculate_class_weights(dataset: Dataset, config: Dict[str, Any]) -> torch.T
     weights = np.clip(weights, a_min=None, a_max=30.0)   # clamp prima
     weights_tensor = torch.tensor(weights, dtype=torch.float).to(config["DEVICE"])
     
-    print("\nPesi calcolati per la loss (con boost per classi rare):")
-    for i, w in enumerate(weights_tensor):
-        print(f"  - Classe {i}: {w.item():.2f}")
     return weights_tensor
 
 
