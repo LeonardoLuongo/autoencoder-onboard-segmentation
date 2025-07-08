@@ -418,17 +418,61 @@ def calculate_class_weights(dataset: Dataset, config: Dict[str, Any]) -> torch.T
 # =============================================================================
 # 5. MODELLO E FUNZIONI DI TRAINING/VALIDAZIONE (Logica invariata)
 # =============================================================================
+import segmentation_models_pytorch as smp
+import torch.nn as nn
+
+
+
+class UNetWithDropout(nn.Module):
+    def __init__(self,
+                 encoder_name: str,
+                 encoder_weights: str,
+                 in_channels: int,
+                 classes: int,
+                 dropout_rate: float = 0.2):
+        super().__init__()
+        # modello SMP originale
+        self.unet = smp.Unet(
+            encoder_name=encoder_name,
+            encoder_weights=encoder_weights,
+            in_channels=in_channels,
+            classes=classes
+        )
+
+        # --- dropout che useremo sul decoder ---
+        self.extra_dropout = nn.Dropout2d(p=dropout_rate)
+
+        # 🔑 esponi i sottocomponenti originali
+        self.encoder = self.unet.encoder
+        self.decoder = self.unet.decoder
+        self.segmentation_head = self.unet.segmentation_head
+
+        # 🔑 aggancia il dropout come attributo della segmentation_head
+        #     (stessa istanza → cambiare .p qui o su segmentation_head.dropout è identico)
+        self.segmentation_head.dropout = self.extra_dropout
+
+    def forward(self, x):
+        feats = self.encoder(x)        # lista feature maps
+        x = self.decoder(*feats)       # decoder
+        x = self.extra_dropout(x)      # regolarizzazione
+        x = self.segmentation_head(x)  # conv finale
+        return x
+
+
+
+
 def get_model(config: Dict[str, Any]) -> nn.Module:
-    model = smp.Unet(encoder_name=config["ENCODER"], encoder_weights=config["ENCODER_WEIGHTS"], in_channels=3, classes=config["NUM_CLASSES"])
-    model.segmentation_head = smp_base.SegmentationHead(
-        in_channels=model.decoder.out_channels,
-        out_channels=config["NUM_CLASSES"],
-        activation=None,
-        kernel_size=1,
-        upsampling=model.decoder.upsampling,
-        dropout_p=0.5 
+    model = UNetWithDropout(
+        encoder_name=config["ENCODER"],
+        encoder_weights=config["ENCODER_WEIGHTS"],
+        in_channels=3,
+        classes=config["NUM_CLASSES"],
+        dropout_rate=config.get("DROPOUT", 0.2)
     )
-    tqdm.write(f"Creazione del modello: U-Net con encoder '{config['ENCODER']}'"); tqdm.write(f"Parametri addestrabili: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}"); return model
+    tqdm.write(f"Creazione del modello: U-Net con encoder '{config['ENCODER']}'")
+    tqdm.write(f"Parametri addestrabili: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
+    return model
+
 
 def plot_confusion_matrix(conf_matrix_np, class_names, ignore_index, save_path="confusion_matrix_best.png"):
     tqdm.write("Visualizzazione e salvataggio Matrice di Confusione...")
