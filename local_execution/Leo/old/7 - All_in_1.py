@@ -710,22 +710,21 @@ class BoundaryLoss(nn.Module):
         self.ignore = ignore_index
         self.alpha = alpha
 
-    def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        probs = torch.softmax(logits, dim=1)                   # (B,C,H,W)
+    def forward(self, logits, target):
+        probs = torch.softmax(logits, dim=1)
         B, _, H, W = probs.shape
         losses = []
-
         for c in range(self.C):
-            if c == self.ignore:        # salta background/ignore
-                continue
-            gt_c = (target == c).float().unsqueeze(1)          # (B,1,H,W)
-            # Kornia distance transform: valori 0 sul contorno, ↑ lontano
+            if c == self.ignore: continue
+            gt_c = (target == c).float().unsqueeze(1)
+            # distanza SOLO fuori dall’oggetto (come facevi)
             dt = distance_transform(1.0 - gt_c)
-            dt = dt / (dt.max() + 1e-6)          # ora ∈ [0,1]
-            dt = dt ** self.alpha               # (B,1,H,W)
-
-            losses.append((probs[:, c:c+1] * dt.to(probs)).mean())
-
+            dt = dt / (dt.max() + 1e-6)          # [0,1]
+            mask = (dt > 0)                      # banda esterna
+            losses.append(
+                (probs[:, c:c+1] * dt * mask).sum() /
+                (mask.sum() + 1e-6)
+            )
         return torch.stack(losses).mean()
 
 
