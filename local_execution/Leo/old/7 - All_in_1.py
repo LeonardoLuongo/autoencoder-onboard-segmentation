@@ -316,10 +316,13 @@ class SegmentationDataset(Dataset):
         # Maschera a tensore (H, W), long
         mask_tensor = torch.from_numpy(mask_np.copy()).long()
 
-        # Applica le trasformazioni Kornia.
-        # Input: immagine (C,H,W), maschera (H,W)
-        # Output di Kornia: immagine (1,C,H,W), maschera (1,1,H,W)
-        aug_image, aug_mask = self.transform(image_tensor, mask_tensor)
+        for _ in range(10):
+            # Applica le trasformazioni Kornia.
+            # Input: immagine (C,H,W), maschera (H,W)
+            # Output di Kornia: immagine (1,C,H,W), maschera (1,1,H,W)
+            aug_image, aug_mask = self.transform(image_tensor, mask_tensor)
+            if (aug_mask != self.config["IGNORE_INDEX"]).any():
+                return aug_image.squeeze(0), aug_mask.squeeze()
         
         # --- LA CORREZIONE È QUI ---
         # Rimuovi la dimensione batch dall'immagine e TUTTE le dimensioni
