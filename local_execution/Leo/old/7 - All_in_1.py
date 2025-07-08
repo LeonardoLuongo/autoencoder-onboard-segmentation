@@ -710,19 +710,21 @@ class BoundaryLoss(nn.Module):
         self.ignore = ignore_index
         self.alpha = alpha
 
-    def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        probs = torch.softmax(logits, dim=1)                   # (B,C,H,W)
+    def forward(self, logits, target):
+        probs = torch.softmax(logits, dim=1)
         B, _, H, W = probs.shape
         losses = []
-
         for c in range(self.C):
-            if c == self.ignore:        # salta background/ignore
-                continue
-            gt_c = (target == c).float().unsqueeze(1)          # (B,1,H,W)
-            # Kornia distance transform: valori 0 sul contorno, ↑ lontano
-            dt = distance_transform(1.0 - gt_c) ** self.alpha  # (B,1,H,W)
-            losses.append((probs[:, c:c+1] * dt.to(probs)).mean())
-
+            if c == self.ignore: continue
+            gt_c = (target == c).float().unsqueeze(1)
+            # distanza SOLO fuori dall’oggetto (come facevi)
+            dt = distance_transform(1.0 - gt_c)
+            dt = dt / (dt.max() + 1e-6)          # [0,1]
+            mask = (dt > 0)                      # banda esterna
+            losses.append(
+                (probs[:, c:c+1] * dt * mask).sum() /
+                (mask.sum() + 1e-6)
+            )
         return torch.stack(losses).mean()
 
 
@@ -789,7 +791,7 @@ def main():
 
     best_iou = -1.0; best_conf_matrix = None; global_epoch = 0
 
-    # --- FASE 1: FREEZE ENCODER, TRAIN DECODER ---
+    # # --- FASE 1: FREEZE ENCODER, TRAIN DECODER ---
     tqdm.write("\n--- INIZIO FASE 1: TRAINING DEL DECODER (ENCODER CONGELATO) ---")
     for param in model.encoder.parameters(): 
         param.requires_grad = False
@@ -853,13 +855,14 @@ def main():
     ).to(device)
 
     def combined_loss(pred, target, feats=None):
-
         loss_ft = 0.35 * criterion_ft(pred, target) 
         loss_lov = 0.55 * lovasz_softmax(F.softmax(pred, dim=1), target, ignore=config["IGNORE_INDEX"]) 
-        loss_bound = 0.1 * boundaryLoss(pred, target)
+        lambda_bound = 20.0
+        loss_bound = lambda_bound * boundaryLoss(pred, target)
 
         return loss_ft + loss_lov + loss_bound
-
+    
+    
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(fine_tune_optimizer, 'max', patience=3, factor=0.5, cooldown=1, min_lr=1e-7)
 
     for epoch in range(config["FINE_TUNING_EPOCHS"]):
