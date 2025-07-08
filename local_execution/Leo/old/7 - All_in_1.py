@@ -552,7 +552,7 @@ def train_one_epoch(model, loader, optimizer, scheduler, loss_function, scaler, 
         with autocast(enabled=use_amp, device_type=device.type if use_amp else 'cpu'):
             outputs = model(images); 
             feats = model.encoder(images)[-1]
-            loss = loss_function(outputs, masks, feats)
+            loss = loss_function(outputs, masks, feats, current_epoch)
 
         optimizer.zero_grad(); scaler.scale(loss).backward(); scaler.step(optimizer); scaler.update(); 
         if scheduler is not None:
@@ -786,6 +786,33 @@ class BoundaryLoss(nn.Module):
 
         return multiplied.mean()
 
+def fast_boundary_loss(logits, targets, ignore_index=0, down_k=4):
+    """
+    Variante ~20× più veloce della tua BoundaryLoss.
+    1. down-scala logits & target (k=4 default → 136×128)
+    2. calcola distance transform solo lì
+    """
+    # ↓↓↓ Step-1: downsample (antialias=False evita blur sui label)
+    logits_ds  = F.avg_pool2d(logits,      kernel_size=down_k, stride=down_k)
+    targets_ds = F.avg_pool2d(targets.float(), kernel_size=down_k,
+                              stride=down_k, divisor_override=1).long()
+
+    C = logits_ds.shape[1]
+    gt_1hot = F.one_hot(targets_ds, num_classes=C).permute(0,3,1,2).float()
+
+    # Kornia DT lavora sul device del tensor
+    dt = kornia.contrib.distance_transform(1 - gt_1hot)
+
+    probs = torch.softmax(logits_ds, dim=1)
+    loss  = (probs * dt).mean()
+
+    if ignore_index is not None:
+        mask = (targets_ds != ignore_index).unsqueeze(1)
+        loss = (loss * mask).mean()
+
+    return loss
+
+
 
 
 # =============================================================================
@@ -837,86 +864,97 @@ def main():
     best_iou = -1.0; best_conf_matrix = None; global_epoch = 0
 
     # # --- FASE 1: FREEZE ENCODER, TRAIN DECODER ---
-    tqdm.write("\n--- INIZIO FASE 1: TRAINING DEL DECODER (ENCODER CONGELATO) ---")
-    for param in model.encoder.parameters(): 
-        param.requires_grad = False
-    model.segmentation_head.dropout.p = 0.0 
-    optimizer = optim.AdamW(list(model.decoder.parameters()) + list(model.segmentation_head.parameters()), lr=config["LR_HEAD"], weight_decay=config["WEIGHT_DECAY"])
-    scheduler = torch.optim.lr_scheduler.OneCycleLR(
-        optimizer, max_lr=1e-3, steps_per_epoch=len(train_loader),
-        epochs=config["UNFREEZE_EPOCHS"], pct_start=0.1, div_factor=10, final_div_factor=1e3
-    )
+    # tqdm.write("\n--- INIZIO FASE 1: TRAINING DEL DECODER (ENCODER CONGELATO) ---")
+    # for param in model.encoder.parameters(): 
+    #     param.requires_grad = False
+    # model.segmentation_head.dropout.p = 0.0 
+    # optimizer = optim.AdamW(list(model.decoder.parameters()) + list(model.segmentation_head.parameters()), lr=config["LR_HEAD"], weight_decay=config["WEIGHT_DECAY"])
+    # scheduler = torch.optim.lr_scheduler.OneCycleLR(
+    #     optimizer, max_lr=1e-3, steps_per_epoch=len(train_loader),
+    #     epochs=config["UNFREEZE_EPOCHS"], pct_start=0.1, div_factor=10, final_div_factor=1e3
+    # )
 
-    for epoch in range(config["FREEZE_EPOCHS"]):
-        global_epoch += 1; tqdm.write(f"\n--- Fase 1 / Epoch {epoch+1}/{config['FREEZE_EPOCHS']} (Global: {global_epoch}) ---")
-        train_loss = train_one_epoch(
-            model=model, loader=train_loader, optimizer=optimizer, scheduler=scheduler, loss_function=combined_loss, 
-            scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["FREEZE_EPOCHS"]
-        )
-        val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config)
-        # scheduler.step(val_miou)
-        tqdm.write(f"Risultati Epoch {global_epoch}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f}")
-        if val_miou > best_iou:
-            best_iou, best_conf_matrix = val_miou, val_conf_matrix
-            torch.save({'model_state_dict': model.state_dict(), 'config': config}, config["MODEL_SAVE_PATH"])
-            tqdm.write(f"\n>>> 🎉 Nuovo modello migliore salvato! mIoU: {best_iou:.4f} <<<")
+    # for epoch in range(config["FREEZE_EPOCHS"]):
+    #     global_epoch += 1; tqdm.write(f"\n--- Fase 1 / Epoch {epoch+1}/{config['FREEZE_EPOCHS']} (Global: {global_epoch}) ---")
+    #     train_loss = train_one_epoch(
+    #         model=model, loader=train_loader, optimizer=optimizer, scheduler=scheduler, loss_function=combined_loss, 
+    #         scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["FREEZE_EPOCHS"]
+    #     )
+    #     val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config)
+    #     # scheduler.step(val_miou)
+    #     tqdm.write(f"Risultati Epoch {global_epoch}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f}")
+    #     if val_miou > best_iou:
+    #         best_iou, best_conf_matrix = val_miou, val_conf_matrix
+    #         torch.save({'model_state_dict': model.state_dict(), 'config': config}, config["MODEL_SAVE_PATH"])
+    #         tqdm.write(f"\n>>> 🎉 Nuovo modello migliore salvato! mIoU: {best_iou:.4f} <<<")
 
-    # # --- FASE 2: UNFREEZE ALL, FINE-TUNE ---
-    tqdm.write("\n--- INIZIO FASE 2: FINE-TUNING DELL'INTERA RETE (ENCODER SCONGELATO) ---")
-    model.segmentation_head.dropout.p = 0.15
-    train_loader.dataset.transform = get_train_transforms_kornia_crop(config, aggressive_p=0.5) 
-    val_loader.dataset.transform = get_val_transforms_kornia_crop(config) 
+    # # # --- FASE 2: UNFREEZE ALL, FINE-TUNE ---
+    # tqdm.write("\n--- INIZIO FASE 2: FINE-TUNING DELL'INTERA RETE (ENCODER SCONGELATO) ---")
+    # model.segmentation_head.dropout.p = 0.20
+    # train_loader.dataset.transform = get_train_transforms_kornia_crop(config, aggressive_p=0.5) 
+    # val_loader.dataset.transform = get_val_transforms_kornia_crop(config) 
 
-    for param in model.encoder.parameters(): param.requires_grad = True
-    optimizer = optim.AdamW(model.parameters(), lr=config["LR_FULL"]) #, weight_decay=config["WEIGHT_DECAY"])
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5, cooldown=1, min_lr=1e-7)
+    # for param in model.encoder.parameters(): param.requires_grad = True
+    # optimizer = optim.AdamW(model.parameters(), lr=config["LR_FULL"]) #, weight_decay=config["WEIGHT_DECAY"])
+    # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5, cooldown=1, min_lr=1e-7)
 
-    ##########################################################
-    # LOSS pixel_contrast     
-    # def combined_loss(pred, target, feats=None):
-    #     if feats is not None:
-    #         # Training con Pixel Contrastive Loss
-    #         mask_ds = F.interpolate(
-    #             target.unsqueeze(1).float(),
-    #             size=feats.shape[2:], mode="nearest"
-    #         ).squeeze(1).long()
-    #         return 0.8 * criterion_ft(pred, target) + 0.2 * criterion_wce(pred, target) + 5 * pixel_contrast(feats, mask_ds) * config["CONTRASTIVE_WEIGHT"]
-    #     else:
-    #         # Evaluation
-    #         return 0.8 * criterion_ft(pred, target) + 0.2 * criterion_wce(pred, target)
-    ##########################################################
+    # ##########################################################
+    # # LOSS pixel_contrast     
+    # # def combined_loss(pred, target, feats=None):
+    # #     if feats is not None:
+    # #         # Training con Pixel Contrastive Loss
+    # #         mask_ds = F.interpolate(
+    # #             target.unsqueeze(1).float(),
+    # #             size=feats.shape[2:], mode="nearest"
+    # #         ).squeeze(1).long()
+    # #         return 0.8 * criterion_ft(pred, target) + 0.2 * criterion_wce(pred, target) + 5 * pixel_contrast(feats, mask_ds) * config["CONTRASTIVE_WEIGHT"]
+    # #     else:
+    # #         # Evaluation
+    # #         return 0.8 * criterion_ft(pred, target) + 0.2 * criterion_wce(pred, target)
+    # ##########################################################
 
-    for epoch in range(config["UNFREEZE_EPOCHS"]):
-        global_epoch += 1; tqdm.write(f"\n--- Fase 2 / Epoch {epoch+1}/{config['UNFREEZE_EPOCHS']} (Global: {global_epoch}) ---")
+    # for epoch in range(config["UNFREEZE_EPOCHS"]):
+    #     global_epoch += 1; tqdm.write(f"\n--- Fase 2 / Epoch {epoch+1}/{config['UNFREEZE_EPOCHS']} (Global: {global_epoch}) ---")
         
-        train_loss = train_one_epoch(
-            model=model, loader=train_loader, optimizer=optimizer, scheduler=None, loss_function=combined_loss, 
-            scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["UNFREEZE_EPOCHS"]
-        )
-        val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config)
-        scheduler.step(val_miou)
-        tqdm.write(f"Risultati Epoch {global_epoch}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f}")
-        for i, iou in enumerate(val_iou_per_class):
-            if i != config["IGNORE_INDEX"]: tqdm.write(f"    - Classe {i} ({config['CLASS_NAMES'][i]}): {iou:.4f}")
-        if val_miou > best_iou:
-            best_iou, best_conf_matrix = val_miou, val_conf_matrix
-            torch.save({'model_state_dict': model.state_dict(), 'config': config}, config["MODEL_SAVE_PATH"])
-            tqdm.write(f"\n>>> 🎉 Nuovo modello migliore salvato! mIoU: {best_iou:.4f} <<<")
+    #     train_loss = train_one_epoch(
+    #         model=model, loader=train_loader, optimizer=optimizer, scheduler=None, loss_function=combined_loss, 
+    #         scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["UNFREEZE_EPOCHS"]
+    #     )
+    #     val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config)
+    #     scheduler.step(val_miou)
+    #     tqdm.write(f"Risultati Epoch {global_epoch}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f}")
+    #     for i, iou in enumerate(val_iou_per_class):
+    #         if i != config["IGNORE_INDEX"]: tqdm.write(f"    - Classe {i} ({config['CLASS_NAMES'][i]}): {iou:.4f}")
+    #     if val_miou > best_iou:
+    #         best_iou, best_conf_matrix = val_miou, val_conf_matrix
+    #         torch.save({'model_state_dict': model.state_dict(), 'config': config}, config["MODEL_SAVE_PATH"])
+    #         tqdm.write(f"\n>>> 🎉 Nuovo modello migliore salvato! mIoU: {best_iou:.4f} <<<")
 
     
     # --- FASE 3: FINE-TUNING FINALE ---
     tqdm.write("\n--- INIZIO FASE 3: FINE-TUNING FINALE ---")
-    fine_tune_optimizer = optim.AdamW(model.parameters(), lr=1e-5)
+    fine_tune_optimizer = optim.AdamW(model.parameters(), lr=5e-6)
     model.segmentation_head.dropout.p = 0.0 
-    boundaryLoss = BoundaryLoss(ignore_index=config["IGNORE_INDEX"]).to(device)
+    train_loader.dataset.transform = get_train_transforms_kornia_crop(config, disable=True)
+    val_loader.dataset.transform = get_val_transforms_kornia_crop(config)
 
-    def combined_loss(pred, target, feats=None):
+    final_lambda = 10
+    counter = 0
+    def combined_loss(pred, target, feats=None, epoch=None):
+        nonlocal final_lambda 
+        nonlocal counter
+        lam = min(final_lambda, final_lambda * (epoch/10))
         loss_ft = 0.35 * criterion_ft(pred, target) 
-        loss_lov = 0.55 * lovasz_softmax(F.softmax(pred, dim=1), target, ignore=config["IGNORE_INDEX"]) 
-        lambda_bound = 20.0
-        loss_bound = 0.10 * lambda_bound * boundaryLoss(pred, target)
+        loss_lov = 0.65 * lovasz_softmax(F.softmax(pred, dim=1), target, ignore=config["IGNORE_INDEX"]) 
+        loss_bnd = lam  * fast_boundary_loss(pred, target, ignore_index=config["IGNORE_INDEX"])
+        total_loss = loss_ft + loss_lov + loss_bnd
+        if counter < 100:
+            counter += 1
+            tqdm.write(f"Epoch {epoch+1}/{config['FINE_TUNING_EPOCHS']} - Loss FT: {loss_ft:.4f}, Loss Lovasz: {loss_lov:.4f}, Loss Boundary: {loss_bnd:.4f} (λ={lam:.2f})")
+            print(f"Bnd {loss_bnd/total_loss:.2%}  Lovasz {loss_lov/total_loss:.2%}  FT {loss_ft/total_loss:.2%}")
 
-        return loss_ft + loss_lov + loss_bound
+
+        return total_loss
     
     
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(fine_tune_optimizer, 'max', patience=3, factor=0.5, cooldown=1, min_lr=1e-7)
