@@ -786,28 +786,34 @@ class BoundaryLoss(nn.Module):
 
         return multiplied.mean()
 
-def fast_boundary_loss(logits, targets, ignore_index=0, down_k=4):
+def fast_boundary_loss(logits, targets, ignore_index=0, down_k=8, every_n=2):
     """
     Variante ~20× più veloce della tua BoundaryLoss.
     1. down-scala logits & target (k=4 default → 136×128)
     2. calcola distance transform solo lì
     """
-    # ↓↓↓ Step-1: downsample (antialias=False evita blur sui label)
-    logits_ds  = F.avg_pool2d(logits,      kernel_size=down_k, stride=down_k)
-    targets_ds = F.avg_pool2d(targets.float(),kernel_size=down_k,stride=down_k).round().long()
+    # if fast_boundary_loss._step % every_n != 0:
+    #     fast_boundary_loss._step += 1
+    #     return logits.new_tensor(0.)  # zero grad
+    # fast_boundary_loss._step += 1
 
-    C = logits_ds.shape[1]
-    gt_1hot = F.one_hot(targets_ds, num_classes=C).permute(0,3,1,2).float()
+    with autocast(enabled=True, device_type=logits.device.type):
+        # ↓↓↓ Step-1: downsample (antialias=False evita blur sui label)
+        logits_ds  = F.avg_pool2d(logits,      kernel_size=down_k, stride=down_k)
+        targets_ds = F.avg_pool2d(targets.float(),kernel_size=down_k,stride=down_k).round().long()
 
-    # Kornia DT lavora sul device del tensor
-    dt = kornia.contrib.distance_transform(1 - gt_1hot)
+        C = logits_ds.shape[1]
+        gt_1hot = F.one_hot(targets_ds, num_classes=C).permute(0,3,1,2).float()
 
-    probs = torch.softmax(logits_ds, dim=1)
-    loss  = (probs * dt).mean()
+        # Kornia DT lavora sul device del tensor
+        dt = kornia.contrib.distance_transform(1 - gt_1hot)
 
-    if ignore_index is not None:
-        mask = (targets_ds != ignore_index).unsqueeze(1)
-        loss = (loss * mask).mean()
+        probs = torch.softmax(logits_ds, dim=1)
+        loss  = (probs * dt).mean()
+
+        if ignore_index is not None:
+            mask = (targets_ds != ignore_index).unsqueeze(1)
+            loss = (loss * mask).mean()
 
     return loss
 
@@ -944,7 +950,7 @@ def main():
         lam = min(final_lambda, final_lambda * (epoch/10))
         loss_ft = 0.35 * criterion_ft(pred, target) 
         loss_lov = 0.65 * lovasz_softmax(F.softmax(pred, dim=1), target, ignore=config["IGNORE_INDEX"]) 
-        loss_bnd = lam  * fast_boundary_loss(pred, target, ignore_index=config["IGNORE_INDEX"])
+        loss_bnd = lam * fast_boundary_loss(pred, target, ignore_index=config["IGNORE_INDEX"])
         total_loss = loss_ft + loss_lov + loss_bnd
         if counter < 100:
             counter += 1
