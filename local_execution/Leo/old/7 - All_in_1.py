@@ -941,7 +941,6 @@ def main():
     final_lambda = 10
     counter = 0
     def combined_loss(pred, target, feats=None, epoch=None):
-        nonlocal final_lambda 
         nonlocal counter
         lam = min(final_lambda, final_lambda * (epoch/10))
         loss_ft = 0.35 * criterion_ft(pred, target) 
