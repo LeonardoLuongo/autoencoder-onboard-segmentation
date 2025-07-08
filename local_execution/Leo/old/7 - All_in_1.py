@@ -251,34 +251,48 @@ def get_val_transforms(output_size: Tuple[int, int], mean: float, std: float) ->
 
 from kornia.constants import DataKey, Resample
 
-def get_train_transforms_kornia(config, aggressive_p=0.5):
+def get_train_transforms_kornia(config, disable=False, aggressive_p=0.5):
     output_size = config["OUTPUT_SIZE"]
     mean, std = config["MEAN"], config["STD"]
+    if disable:
+        return K.AugmentationSequential(
+            K.Resize(size=output_size),
+            K.Normalize(mean=torch.tensor(mean), std=torch.tensor(std)),
 
-    return K.AugmentationSequential(
-        # --- augmentations ---
-        K.RandomHorizontalFlip(p=0.5),
-        K.RandomVerticalFlip(p=aggressive_p / 2),
-        K.RandomRotation(degrees=180, p=aggressive_p),
-        K.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.7),
-        K.RandomGaussianBlur(kernel_size=(3, 5), sigma=(0.1, 2.0), p=0.4),
+            data_keys=["input", "mask"],
+            extra_args={
+                DataKey.MASK: {          # <-- unica chiave, vale per TUTTI gli op
+                    "resample": Resample.NEAREST,
+                    "align_corners": False,
+                }
+            },
+            same_on_batch=False,
+        )
+    else:
+        return K.AugmentationSequential(
+            # --- augmentations ---
+            K.RandomHorizontalFlip(p=0.5),
+            K.RandomVerticalFlip(p=aggressive_p / 2),
+            K.RandomRotation(degrees=180, p=aggressive_p),
+            K.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.7),
+            K.RandomGaussianBlur(kernel_size=(3, 5), sigma=(0.1, 2.0), p=0.4),
 
-        K.RandomErasing(p=0.5, scale=(0.02, 0.1)),
-        K.RandomClahe(p=0.4), 
-        K.RandomGamma(gamma=(0.7, 1.5), p=0.5),
+            K.RandomErasing(p=0.5, scale=(0.02, 0.1)),
+            K.RandomClahe(p=0.4), 
+            K.RandomGamma(gamma=(0.7, 1.5), p=0.5),
 
-        K.Resize(size=output_size),
-        K.Normalize(mean=torch.tensor(mean), std=torch.tensor(std)),
+            K.Resize(size=output_size),
+            K.Normalize(mean=torch.tensor(mean), std=torch.tensor(std)),
 
-        data_keys=["input", "mask"],
-        extra_args={
-            DataKey.MASK: {          # <-- unica chiave, vale per TUTTI gli op
-                "resample": Resample.NEAREST,
-                "align_corners": False,
-            }
-        },
-        same_on_batch=False,
-    )
+            data_keys=["input", "mask"],
+            extra_args={
+                DataKey.MASK: {          # <-- unica chiave, vale per TUTTI gli op
+                    "resample": Resample.NEAREST,
+                    "align_corners": False,
+                }
+            },
+            same_on_batch=False,
+        )
 
 
 def get_val_transforms_kornia(config: Dict[str, Any]) -> torch.nn.Sequential:
@@ -732,7 +746,7 @@ def main():
     tqdm.write(f"Device: {device} | Mixed Precision: {use_amp}"); tqdm.write(f"Strategia Finale: {config['ENCODER']} con Augmentation Mirata")
 
     # Pipeline di augmentation diverse per training e validazione
-    train_transforms = get_train_transforms_kornia(config, aggressive_p=0.1) 
+    train_transforms = get_train_transforms_kornia(config, aggressive_p=0.03) 
     val_transforms = get_val_transforms_kornia(config)
     
     train_dataset = SegmentationDataset(train_dirs, train_transforms, config)
@@ -775,57 +789,57 @@ def main():
 
     best_iou = -1.0; best_conf_matrix = None; global_epoch = 0
 
-    # --- FASE 1: FREEZE ENCODER, TRAIN DECODER ---
-    tqdm.write("\n--- INIZIO FASE 1: TRAINING DEL DECODER (ENCODER CONGELATO) ---")
-    for param in model.encoder.parameters(): 
-        param.requires_grad = False
-    model.segmentation_head.dropout.p = 0.0 
-    optimizer = optim.AdamW(list(model.decoder.parameters()) + list(model.segmentation_head.parameters()), lr=config["LR_HEAD"], weight_decay=config["WEIGHT_DECAY"])
-    scheduler = torch.optim.lr_scheduler.OneCycleLR(
-        optimizer, max_lr=1e-3, steps_per_epoch=len(train_loader),
-        epochs=config["UNFREEZE_EPOCHS"], pct_start=0.1, div_factor=10, final_div_factor=1e3
-    )
+    # # --- FASE 1: FREEZE ENCODER, TRAIN DECODER ---
+    # tqdm.write("\n--- INIZIO FASE 1: TRAINING DEL DECODER (ENCODER CONGELATO) ---")
+    # for param in model.encoder.parameters(): 
+    #     param.requires_grad = False
+    # model.segmentation_head.dropout.p = 0.0 
+    # optimizer = optim.AdamW(list(model.decoder.parameters()) + list(model.segmentation_head.parameters()), lr=config["LR_HEAD"], weight_decay=config["WEIGHT_DECAY"])
+    # scheduler = torch.optim.lr_scheduler.OneCycleLR(
+    #     optimizer, max_lr=1e-3, steps_per_epoch=len(train_loader),
+    #     epochs=config["UNFREEZE_EPOCHS"], pct_start=0.1, div_factor=10, final_div_factor=1e3
+    # )
 
-    for epoch in range(config["FREEZE_EPOCHS"]):
-        global_epoch += 1; tqdm.write(f"\n--- Fase 1 / Epoch {epoch+1}/{config['FREEZE_EPOCHS']} (Global: {global_epoch}) ---")
-        train_loss = train_one_epoch(
-            model=model, loader=train_loader, optimizer=optimizer, scheduler=scheduler, loss_function=combined_loss, 
-            scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["FREEZE_EPOCHS"]
-        )
-        val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config)
-        # scheduler.step(val_miou)
-        tqdm.write(f"Risultati Epoch {global_epoch}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f}")
-        if val_miou > best_iou:
-            best_iou, best_conf_matrix = val_miou, val_conf_matrix
-            torch.save({'model_state_dict': model.state_dict(), 'config': config}, config["MODEL_SAVE_PATH"])
-            tqdm.write(f"\n>>> 🎉 Nuovo modello migliore salvato! mIoU: {best_iou:.4f} <<<")
+    # for epoch in range(config["FREEZE_EPOCHS"]):
+    #     global_epoch += 1; tqdm.write(f"\n--- Fase 1 / Epoch {epoch+1}/{config['FREEZE_EPOCHS']} (Global: {global_epoch}) ---")
+    #     train_loss = train_one_epoch(
+    #         model=model, loader=train_loader, optimizer=optimizer, scheduler=scheduler, loss_function=combined_loss, 
+    #         scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["FREEZE_EPOCHS"]
+    #     )
+    #     val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config)
+    #     # scheduler.step(val_miou)
+    #     tqdm.write(f"Risultati Epoch {global_epoch}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f}")
+    #     if val_miou > best_iou:
+    #         best_iou, best_conf_matrix = val_miou, val_conf_matrix
+    #         torch.save({'model_state_dict': model.state_dict(), 'config': config}, config["MODEL_SAVE_PATH"])
+    #         tqdm.write(f"\n>>> 🎉 Nuovo modello migliore salvato! mIoU: {best_iou:.4f} <<<")
 
-    # # --- FASE 2: UNFREEZE ALL, FINE-TUNE ---
-    tqdm.write("\n--- INIZIO FASE 2: FINE-TUNING DELL'INTERA RETE (ENCODER SCONGELATO) ---")
-    model.segmentation_head.dropout.p = 0.25
-    train_loader.dataset.transform = get_train_transforms_kornia(config, aggressive_p=0.5) 
+    # # # --- FASE 2: UNFREEZE ALL, FINE-TUNE ---
+    # tqdm.write("\n--- INIZIO FASE 2: FINE-TUNING DELL'INTERA RETE (ENCODER SCONGELATO) ---")
+    # model.segmentation_head.dropout.p = 0.25
+    # train_loader.dataset.transform = get_train_transforms_kornia(config, aggressive_p=0.5) 
 
-    for param in model.encoder.parameters(): param.requires_grad = True
-    optimizer = optim.AdamW(model.parameters(), lr=config["LR_FULL"]) #, weight_decay=config["WEIGHT_DECAY"])
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5, cooldown=1, min_lr=1e-7)
+    # for param in model.encoder.parameters(): param.requires_grad = True
+    # optimizer = optim.AdamW(model.parameters(), lr=config["LR_FULL"]) #, weight_decay=config["WEIGHT_DECAY"])
+    # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5, cooldown=1, min_lr=1e-7)
             
 
-    for epoch in range(config["UNFREEZE_EPOCHS"]):
-        global_epoch += 1; tqdm.write(f"\n--- Fase 2 / Epoch {epoch+1}/{config['UNFREEZE_EPOCHS']} (Global: {global_epoch}) ---")
+    # for epoch in range(config["UNFREEZE_EPOCHS"]):
+    #     global_epoch += 1; tqdm.write(f"\n--- Fase 2 / Epoch {epoch+1}/{config['UNFREEZE_EPOCHS']} (Global: {global_epoch}) ---")
         
-        train_loss = train_one_epoch(
-            model=model, loader=train_loader, optimizer=optimizer, scheduler=None, loss_function=combined_loss, 
-            scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["UNFREEZE_EPOCHS"]
-        )
-        val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config)
-        scheduler.step(val_miou)
-        tqdm.write(f"Risultati Epoch {global_epoch}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f}")
-        for i, iou in enumerate(val_iou_per_class):
-            if i != config["IGNORE_INDEX"]: tqdm.write(f"    - Classe {i} ({config['CLASS_NAMES'][i]}): {iou:.4f}")
-        if val_miou > best_iou:
-            best_iou, best_conf_matrix = val_miou, val_conf_matrix
-            torch.save({'model_state_dict': model.state_dict(), 'config': config}, config["MODEL_SAVE_PATH"])
-            tqdm.write(f"\n>>> 🎉 Nuovo modello migliore salvato! mIoU: {best_iou:.4f} <<<")
+    #     train_loss = train_one_epoch(
+    #         model=model, loader=train_loader, optimizer=optimizer, scheduler=None, loss_function=combined_loss, 
+    #         scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["UNFREEZE_EPOCHS"]
+    #     )
+    #     val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config)
+    #     scheduler.step(val_miou)
+    #     tqdm.write(f"Risultati Epoch {global_epoch}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f}")
+    #     for i, iou in enumerate(val_iou_per_class):
+    #         if i != config["IGNORE_INDEX"]: tqdm.write(f"    - Classe {i} ({config['CLASS_NAMES'][i]}): {iou:.4f}")
+    #     if val_miou > best_iou:
+    #         best_iou, best_conf_matrix = val_miou, val_conf_matrix
+    #         torch.save({'model_state_dict': model.state_dict(), 'config': config}, config["MODEL_SAVE_PATH"])
+    #         tqdm.write(f"\n>>> 🎉 Nuovo modello migliore salvato! mIoU: {best_iou:.4f} <<<")
 
     
     # --- FASE 3: FINE-TUNING FINALE ---
@@ -840,12 +854,14 @@ def main():
 
     def combined_loss(pred, target, feats=None):
 
-        loss_ft = 0.35 * criterion_ft(pred, target) 
-        loss_lov = 0.55 * lovasz_softmax(F.softmax(pred, dim=1), target, ignore=config["IGNORE_INDEX"]) 
-        loss_bound = 0.1 * boundaryLoss(pred, target)
+        # loss_ft = 0.35 * criterion_ft(pred, target) 
+        # loss_lov = 0.55 * lovasz_softmax(F.softmax(pred, dim=1), target, ignore=config["IGNORE_INDEX"]) 
+        loss_bound = boundaryLoss(pred, target)
 
-        return loss_ft + loss_lov + loss_bound
-
+        # return loss_ft + loss_lov + loss_bound
+        return loss_bound
+    
+    
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(fine_tune_optimizer, 'max', patience=3, factor=0.5, cooldown=1, min_lr=1e-7)
 
     for epoch in range(config["FINE_TUNING_EPOCHS"]):
