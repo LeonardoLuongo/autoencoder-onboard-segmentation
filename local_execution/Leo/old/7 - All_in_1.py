@@ -50,7 +50,7 @@ import kornia.geometry.transform as KGT
 from kornia.utils import image_to_tensor
 import torch
 from segmentation_models_pytorch import base as smp_base
-# from monai.losses import HausdorffDTLoss
+
 
 # =============================================================================
 # 2. RIPRODUCIBILITÀ
@@ -679,6 +679,40 @@ class FocalTverskyLoss(nn.Module):
 
 
 # =============================================================================
+# BoundaryLoss
+# =============================================================================
+
+
+import torch, kornia
+from torch import nn
+from kornia.contrib import distance_transform
+
+class BoundaryLoss(nn.Module):
+    def __init__(self, num_classes: int,
+                 ignore_index: int = 0,
+                 alpha: float = 2.0):
+        super().__init__()
+        self.C = num_classes
+        self.ignore = ignore_index
+        self.alpha = alpha
+
+    def forward(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        probs = torch.softmax(logits, dim=1)                   # (B,C,H,W)
+        B, _, H, W = probs.shape
+        losses = []
+
+        for c in range(self.C):
+            if c == self.ignore:        # salta background/ignore
+                continue
+            gt_c = (target == c).float().unsqueeze(1)          # (B,1,H,W)
+            # Kornia distance transform: valori 0 sul contorno, ↑ lontano
+            dt = distance_transform(1.0 - gt_c) ** self.alpha  # (B,1,H,W)
+            losses.append((probs[:, c:c+1] * dt.to(probs)).mean())
+
+        return torch.stack(losses).mean()
+
+
+# =============================================================================
 # 6. FUNZIONE PRINCIPALE (CON AUGMENTATION AGGRESSIVA)
 # =============================================================================
 def main():
@@ -798,19 +832,19 @@ def main():
     tqdm.write("\n--- INIZIO FASE 3: FINE-TUNING FINALE ---")
     fine_tune_optimizer = optim.AdamW(model.parameters(), lr=1e-5)
     model.segmentation_head.dropout.p = 0.0 
-    # hausdorff_loss_fn = HausdorffDTLoss(
-    #     softmax=True,          # Applica la softmax internamente
-    #     to_onehot_y=True,      # Converte il target in one-hot internamente
-    #     include_background=False # Importantissimo: IGNORA la classe 0, il nostro ignore_index
-    # ).to(device)
+    boundaryLoss = BoundaryLoss(
+        num_classes=config["NUM_CLASSES"],
+        ignore_index=config["IGNORE_INDEX"],
+        alpha=2.0
+    ).to(device)
 
     def combined_loss(pred, target, feats=None):
 
-        loss_ft = 0.25 * criterion_ft(pred, target) 
-        loss_lov = 0.65 * lovasz_softmax(F.softmax(pred, dim=1), target, ignore=config["IGNORE_INDEX"]) 
-        # loss_hau = 0.1 * hausdorff_loss_fn(pred, target)
+        loss_ft = 0.35 * criterion_ft(pred, target) 
+        loss_lov = 0.55 * lovasz_softmax(F.softmax(pred, dim=1), target, ignore=config["IGNORE_INDEX"]) 
+        loss_bound = 0.1 * boundaryLoss(pred, target)
 
-        return loss_ft + loss_lov # + loss_hau
+        return loss_ft + loss_lov + loss_bound
 
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(fine_tune_optimizer, 'max', patience=3, factor=0.5, cooldown=1, min_lr=1e-7)
 
