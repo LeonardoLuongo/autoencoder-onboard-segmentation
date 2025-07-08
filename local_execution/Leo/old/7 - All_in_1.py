@@ -720,7 +720,10 @@ class BoundaryLoss(nn.Module):
                 continue
             gt_c = (target == c).float().unsqueeze(1)          # (B,1,H,W)
             # Kornia distance transform: valori 0 sul contorno, ↑ lontano
-            dt = distance_transform(1.0 - gt_c) ** self.alpha  # (B,1,H,W)
+            dt = distance_transform(1.0 - gt_c)
+            dt = dt / (dt.max() + 1e-6)          # ora ∈ [0,1]
+            dt = dt ** self.alpha               # (B,1,H,W)
+
             losses.append((probs[:, c:c+1] * dt.to(probs)).mean())
 
         return torch.stack(losses).mean()
