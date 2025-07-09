@@ -789,16 +789,16 @@ class BoundaryLoss(nn.Module):
 
         return multiplied.mean()
 
-def fast_boundary_loss(logits, targets, ignore_index=0, down_k=8, every_n=2):
+def fast_boundary_loss(logits, targets, ignore_index=0, down_k=4, every_n=2):
     """
     Variante ~20× più veloce della tua BoundaryLoss.
     1. down-scala logits & target (k=4 default → 136×128)
     2. calcola distance transform solo lì
     """
-    # if fast_boundary_loss._step % every_n != 0:
-    #     fast_boundary_loss._step += 1
-    #     return logits.new_tensor(0.)  # zero grad
-    # fast_boundary_loss._step += 1
+    if fast_boundary_loss._step % every_n != 0:
+        fast_boundary_loss._step += 1
+        return logits.new_tensor(0.)  # zero grad
+    fast_boundary_loss._step += 1
 
     with autocast(enabled=True, device_type=logits.device.type):
         # ↓↓↓ Step-1: downsample (antialias=False evita blur sui label)
