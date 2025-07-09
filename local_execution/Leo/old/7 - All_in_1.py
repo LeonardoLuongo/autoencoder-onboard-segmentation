@@ -91,6 +91,8 @@ def get_config() -> Dict[str, Any]:
         "CONTRASTIVE_MAX_SAMPLES": 4096*3,  # pixel da campionare per batch
         "CONTRASTIVE_W": 1,         # peso della loss rispetto alle loss di segmento
 
+        "FINAL_TUNING_EPOCHS":5
+
     }
     
     # FIX: Nomi delle classi anonimi come da richiesta
@@ -219,7 +221,7 @@ def calculate_mean_std(loader: DataLoader) -> Tuple[np.ndarray, np.ndarray]:
 
 from kornia.constants import DataKey, Resample
 
-def get_train_transforms_kornia_crop(config, disable=False, aggressive_p=0.5):
+def get_train_transforms_kornia_crop(config, disable=False):
     patch = config["PATCH_SIZE"]
     mean, std = config["MEAN"], config["STD"]
     if disable:
@@ -240,17 +242,29 @@ def get_train_transforms_kornia_crop(config, disable=False, aggressive_p=0.5):
         return K.AugmentationSequential(
             K.RandomCrop(size=patch, p=1.0),
 
-            # --- augmentations ---
-            K.RandomHorizontalFlip(p=0.5),
-            K.RandomVerticalFlip(p=aggressive_p / 2),
-            K.RandomRotation(degrees=180, p=aggressive_p),
-            K.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.7),
-            K.RandomGaussianBlur(kernel_size=(3, 5), sigma=(0.1, 2.0), p=0.4),
+            # ---------------- sensore / ottica ----------------
+            K.RandomGaussianNoise(mean=0., std=0.02, p=0.35),          # “grana”
+            K.RandomMotionBlur(kernel_size=5, angle=15., direction=0.5, p=0.15),
+            K.RandomGaussianBlur((3, 5), (0.8, 1.5), p=0.25),          # lieve defocus
 
-            K.RandomClahe(p=0.4), 
-            K.RandomGamma(gamma=(0.7, 1.5), p=0.5),
+            # ---------------- luce / colore -------------------
+            K.RandomBrightness(brightness=(0.8, 1.2), p=0.6),
+            K.ColorJitter(brightness=0.15, contrast=0.15,
+                        saturation=0.12, hue=0.06, p=0.5),
+            K.RandomSolarize(thresholds=(0.9, 1.0), p=0.15),           # colpi di luce
+            K.RandomEqualize(p=0.25),                                  # auto-eq sensor
 
-            K.Normalize(mean=torch.tensor(mean), std=torch.tensor(std)),
+            # ---------------- meteo “povero” -------------------
+            # (senza RandomFog / Shadow, ma proviamo a simulare aria torbida)
+            K.RandomPlasmaBrightness(alpha=(0.05, 0.10), p=0.20),      # foschia leggera
+
+            # ---------------- sporco / pixel dropout ----------
+            K.RandomErasing(scale=(0.01, 0.03), ratio=(0.3, 3.3),
+                            value=mean, p=0.25),
+
+            # ---------- normalizzazione ----------
+            K.Normalize(mean=torch.tensor(mean),
+                        std=torch.tensor(std)),
 
             data_keys=["input", "mask"],
             extra_args={
@@ -262,7 +276,7 @@ def get_train_transforms_kornia_crop(config, disable=False, aggressive_p=0.5):
             same_on_batch=False,
         )
 
-def get_train_transforms_kornia_resize(config, disable=False, aggressive_p=0.5):
+def get_train_transforms_kornia_resize(config, disable=False):
     patch = config["PATCH_SIZE"]
     mean, std = config["MEAN"], config["STD"]
     if disable:
@@ -283,17 +297,29 @@ def get_train_transforms_kornia_resize(config, disable=False, aggressive_p=0.5):
         return K.AugmentationSequential(
             K.Resize(patch),
 
-            # --- augmentations ---
-            K.RandomHorizontalFlip(p=0.5),
-            K.RandomVerticalFlip(p=aggressive_p / 2),
-            K.RandomRotation(degrees=180, p=aggressive_p),
-            K.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.7),
-            K.RandomGaussianBlur(kernel_size=(3, 5), sigma=(0.1, 2.0), p=0.4),
+            # ---------------- sensore / ottica ----------------
+            K.RandomGaussianNoise(mean=0., std=0.02, p=0.35),          # “grana”
+            K.RandomMotionBlur(kernel_size=5, angle=15., direction=0.5, p=0.15),
+            K.RandomGaussianBlur((3, 5), (0.8, 1.5), p=0.25),          # lieve defocus
 
-            K.RandomClahe(p=0.4), 
-            K.RandomGamma(gamma=(0.7, 1.5), p=0.5),
+            # ---------------- luce / colore -------------------
+            K.RandomBrightness(brightness=(0.8, 1.2), p=0.6),
+            K.ColorJitter(brightness=0.15, contrast=0.15,
+                        saturation=0.12, hue=0.06, p=0.5),
+            K.RandomSolarize(thresholds=(0.9, 1.0), p=0.15),           # colpi di luce
+            K.RandomEqualize(p=0.25),                                  # auto-eq sensor
 
-            K.Normalize(mean=torch.tensor(mean), std=torch.tensor(std)),
+            # ---------------- meteo “povero” -------------------
+            # (senza RandomFog / Shadow, ma proviamo a simulare aria torbida)
+            K.RandomPlasmaBrightness(alpha=(0.05, 0.10), p=0.20),      # foschia leggera
+
+            # ---------------- sporco / pixel dropout ----------
+            K.RandomErasing(scale=(0.01, 0.03), ratio=(0.3, 3.3),
+                            value=mean, p=0.25),
+
+            # ---------- normalizzazione ----------
+            K.Normalize(mean=torch.tensor(mean),
+                        std=torch.tensor(std)),
 
             data_keys=["input", "mask"],
             extra_args={
@@ -861,6 +887,42 @@ def dynamic_penalize_confusion_pytorch(logits: torch.Tensor, targets: torch.Tens
     return penalty_factor * penalty_mask.mean()
 
 
+class HardPairPenaltyLoss(nn.Module):
+    def __init__(self, penalty_pairs: list, penalty_factor: float = 2.0, ignore_index: int = 0):
+        super().__init__()
+        self.penalty_pairs = penalty_pairs
+        self.factor = penalty_factor
+        self.ignore_index = ignore_index
+        self.ce_loss = nn.CrossEntropyLoss(reduction='none') # Calcoliamo la loss per pixel
+
+    def forward(self, logits, targets):
+        # Calcola la loss standard per ogni pixel
+        pixel_loss = self.ce_loss(logits, targets)
+        
+        # Crea una maschera di penalità a zero
+        penalty_mask = torch.zeros_like(targets, dtype=torch.float32)
+        
+        preds = torch.argmax(logits, dim=1)
+        
+        # Per ogni coppia problematica, aumenta la loss
+        for true_cls, pred_cls in self.penalty_pairs:
+            # Penalizza la confusione A -> B
+            mask_a_b = (targets == true_cls) & (preds == pred_cls)
+            penalty_mask[mask_a_b] = self.factor
+            
+            # Penalizza la confusione B -> A
+            mask_b_a = (targets == pred_cls) & (preds == true_cls)
+            penalty_mask[mask_b_a] = self.factor
+            
+        # Pondera la loss originale con la maschera di penalità
+        # Aggiungiamo 1 per non azzerare la loss originale
+        penalized_loss = pixel_loss * (1 + penalty_mask)
+        
+        # Applica la maschera per l'ignore_index
+        valid_mask = targets != self.ignore_index
+        
+        return penalized_loss[valid_mask].mean()
+
 # =============================================================================
 # 6. FUNZIONE PRINCIPALE (CON AUGMENTATION AGGRESSIVA)
 # =============================================================================
@@ -874,6 +936,17 @@ def main():
     class_weights                   = cache["class_weights"].to(config["DEVICE"])
     assert 0.0 <= config["MEAN"].min() and config["MEAN"].max() <= 1.0,  "Mean fuori range 0-1"
     assert 0.0 <  config["STD"].min()  and config["STD"].max()  <  1.0,  "Std anomala"
+
+    print("\n─── STATISTICHE DATASET ───")
+    print(f"MEAN  (R-G-B): {config['MEAN']}  → min {config['MEAN'].min():.4f}  max {config['MEAN'].max():.4f}")
+    print(f"STD   (R-G-B): {config['STD']}   → min {config['STD'].min():.4f}   max {config['STD'].max():.4f}")
+
+    print(f"\nNumero di sample  • train: {len(train_dirs):>5}  • val: {len(val_dirs):>5}")
+
+    print("\nPesi di classe (Cross-Entropy):")
+    for idx, w in enumerate(class_weights.cpu().numpy()):
+        print(f"  classe {idx:>2}: {w:6.2f}")
+    print("──────────────────────────────────────────────────────────────\n")
     
     
     seed_everything(config["RANDOM_SEED"]); device = config["DEVICE"]
@@ -881,7 +954,7 @@ def main():
     tqdm.write(f"Device: {device} | Mixed Precision: {use_amp}"); tqdm.write(f"Strategia Finale: {config['ENCODER']} con Augmentation Mirata")
 
     # Pipeline di augmentation diverse per training e validazione
-    train_transforms = get_train_transforms_kornia_resize(config, aggressive_p=0.01) 
+    train_transforms = get_train_transforms_kornia_resize(config) 
     val_transforms = get_val_transforms_kornia_resize(config)
     
     train_dataset = SegmentationDataset(train_dirs, train_transforms, config)
@@ -944,11 +1017,12 @@ def main():
     # =============================================================================================================================
 
     tqdm.write("\n--- INIZIO FASE 2: FINE-TUNING DELL'INTERA RETE (ENCODER SCONGELATO) ---")
-    model.segmentation_head.dropout.p = 0.20
-    train_loader.dataset.transform = get_train_transforms_kornia_crop(config, aggressive_p=0.5) 
-    val_loader.dataset.transform = get_val_transforms_kornia_crop(config) 
+    # model.segmentation_head.dropout.p = 0.10
+    train_dataset.transform = get_train_transforms_kornia_crop(config)
+    val_dataset.transform = get_val_transforms_kornia_crop(config)
 
-    for param in model.encoder.parameters(): param.requires_grad = True
+    for param in model.encoder.parameters(): 
+        param.requires_grad = True
     optimizer = optim.AdamW(model.parameters(), lr=config["LR_FULL"]) #, weight_decay=config["WEIGHT_DECAY"])
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5, cooldown=1, min_lr=1e-7)
 
@@ -966,6 +1040,19 @@ def main():
     #         # Evaluation
     #         return 0.8 * criterion_ft(pred, target) + 0.2 * criterion_wce(pred, target)
     # #########################################################
+
+    penalty_pairs = [(1, 3), (2, 6)] 
+    criterion_penalty = HardPairPenaltyLoss(penalty_pairs, penalty_factor=2.5).to(device)
+    def combined_loss(pred, target, feats=None, epoch=None):
+        lam_abl = min(1.0, (epoch / 10.0)) * 20.0 # Rampa per ABL
+        lam_penalty = min(1.0, (epoch / 5.0)) # Rampa per la penalità
+        
+        loss_seg = 0.8 * criterion_ft(pred, target) + 0.2 * criterion_wce(pred, target)
+        loss_bnd = boundary_loss(pred, target) # La tua ABL
+        loss_hard_pairs = criterion_penalty(pred, target)
+        
+        return loss_seg + lam_abl * loss_bnd + lam_penalty * loss_hard_pairs
+
 
     for epoch in range(config["UNFREEZE_EPOCHS"]):
         global_epoch += 1; tqdm.write(f"\n--- Fase 2 / Epoch {epoch+1}/{config['UNFREEZE_EPOCHS']} (Global: {global_epoch}) ---")
@@ -988,11 +1075,11 @@ def main():
     # =============================================================================================================================
     # --- FASE 3: FINE-TUNING FINALE ---
     # =============================================================================================================================
-    tqdm.write("\n--- INIZIO FASE 3: FINE-TUNING FINALE ---")
+    tqdm.write("\n--- INIZIO FASE 3: FINE-TUNING ---")
     fine_tune_optimizer = optim.AdamW(model.parameters(), lr=5e-6)
     model.segmentation_head.dropout.p = 0.0 
-    train_loader.dataset.transform = get_train_transforms_kornia_crop(config, disable=True)
-    val_loader.dataset.transform = get_val_transforms_kornia_crop(config)
+    train_dataset.transform = get_train_transforms_kornia_crop(config, disable=True)
+    val_dataset.transform = get_val_transforms_kornia_crop(config)
 
 
 
@@ -1036,6 +1123,56 @@ def main():
             scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["FINE_TUNING_EPOCHS"]
         )
         val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config, current_epoch=epoch)
+        scheduler.step(val_miou)
+        tqdm.write(f"Risultati Epoch {global_epoch}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f}")
+        for i, iou in enumerate(val_iou_per_class):
+            if i != config["IGNORE_INDEX"]: tqdm.write(f"    - Classe {i} ({config['CLASS_NAMES'][i]}): {iou:.4f}")
+        if val_miou > best_iou:
+            best_iou, best_conf_matrix = val_miou, val_conf_matrix
+            torch.save({'model_state_dict': model.state_dict(), 'config': config}, config["MODEL_SAVE_PATH"])
+            tqdm.write(f"\n>>> 🎉 Nuovo modello migliore salvato! mIoU: {best_iou:.4f} <<<")
+
+    tqdm.write("\n--- Training Completato ---")
+    tqdm.write(f"Miglior mIoU di validazione ottenuto: {best_iou:.4f}")
+    if best_conf_matrix is not None: plot_confusion_matrix(best_conf_matrix, config["CLASS_NAMES"], config["IGNORE_INDEX"])
+
+
+    # =============================================================================================================================
+    # --- FASE 4: FINE-TUNING FINALE ---
+    # =============================================================================================================================
+    tqdm.write("\n--- INIZIO FASE 4: FULL-IMAGE-TUNING ---")
+    full_patch  = (544, 1024)
+    full_stride = full_patch 
+
+    norm_transf = K.AugmentationSequential(
+        K.Normalize(mean=torch.tensor(config["MEAN"]),
+                    std=torch.tensor(config["STD"])),
+        data_keys=['input', 'mask'],
+        extra_args={DataKey.MASK: {"resample": Resample.NEAREST}},
+    )
+    train_dataset_full = SegmentationDataset(train_dirs, norm_transf, config)
+    val_dataset_full   = SegmentationDataset(val_dirs,   norm_transf, config)
+
+    train_loader = DataLoader(train_dataset_full, batch_size=1, shuffle=True,
+                            num_workers=2, pin_memory=True)
+    val_loader   = DataLoader(val_dataset_full,   batch_size=1, shuffle=False,
+                            num_workers=2, pin_memory=True)
+
+    full_img_optimizer = optim.AdamW(model.parameters(), lr=5e-6)
+    model.segmentation_head.dropout.p = 0.0 
+
+    steps_tot = config["FINAL_TUNING_EPOCHS"] * len(train_loader)
+    lr_lambda = lambda it: 0.95 ** (it / steps_tot)       # poly-ish
+    scheduler  = torch.optim.lr_scheduler.LambdaLR(full_img_optimizer, lr_lambda)
+
+    for epoch in range(config["FINAL_TUNING_EPOCHS"]):
+        global_epoch += 1; tqdm.write(f"\n--- Fase 3 / Epoch {epoch+1}/{config['FINAL_TUNING_EPOCHS']} (Global: {global_epoch}) ---")
+        
+        train_loss = train_one_epoch(
+            model=model, loader=train_loader, optimizer=full_img_optimizer, scheduler=None, loss_function=combined_loss, 
+            scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["FINAL_TUNING_EPOCHS"]
+        )
+        val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config, current_epoch=epoch, use_sliding=False)
         scheduler.step(val_miou)
         tqdm.write(f"Risultati Epoch {global_epoch}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f}")
         for i, iou in enumerate(val_iou_per_class):
