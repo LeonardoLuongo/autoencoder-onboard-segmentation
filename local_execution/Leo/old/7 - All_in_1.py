@@ -564,14 +564,14 @@ def train_one_epoch(model, loader, optimizer, scheduler, loss_function, scaler, 
         running_loss += loss.item(); progress_bar.set_postfix(loss=f"{loss.item():.4f}")
     return running_loss / len(loader)
 
-def evaluate(model, loader, criterion, device, config, use_sliding = False) -> Tuple[float, float, np.ndarray, np.ndarray]:
+def evaluate(model, loader, criterion, device, config, use_sliding = False, current_epoch = None) -> Tuple[float, float, np.ndarray, np.ndarray]:
     model.eval(); total_loss = 0.0; conf_matrix = torch.zeros(config["NUM_CLASSES"], config["NUM_CLASSES"], dtype=torch.int64, device=device)
     with torch.no_grad():
         for images, masks in tqdm(loader, desc="Validazione", leave=False):
             images, masks = images.to(device), masks.to(device, dtype=torch.long)
             with autocast(enabled=True, device_type=device.type if device.type=='cuda' else 'cpu'):
                 outputs = model(images); 
-                loss = criterion(outputs, masks)
+                loss = criterion(outputs, masks, epoch=current_epoch)
             total_loss += loss.item(); 
             
             if use_sliding:
@@ -789,16 +789,16 @@ class BoundaryLoss(nn.Module):
 
         return multiplied.mean()
 
-def fast_boundary_loss(logits, targets, ignore_index=0, down_k=8, every_n=2):
+def fast_boundary_loss(logits, targets, ignore_index=0, down_k=4, every_n=2):
     """
     Variante ~20× più veloce della tua BoundaryLoss.
     1. down-scala logits & target (k=4 default → 136×128)
     2. calcola distance transform solo lì
     """
-    # if fast_boundary_loss._step % every_n != 0:
-    #     fast_boundary_loss._step += 1
-    #     return logits.new_tensor(0.)  # zero grad
-    # fast_boundary_loss._step += 1
+    if fast_boundary_loss._step % every_n != 0:
+        fast_boundary_loss._step += 1
+        return logits.new_tensor(0.)  # zero grad
+    fast_boundary_loss._step += 1
 
     with autocast(enabled=True, device_type=logits.device.type):
         # ↓↓↓ Step-1: downsample (antialias=False evita blur sui label)
@@ -875,44 +875,44 @@ def main():
     # --- FASE 1: FREEZE ENCODER, TRAIN DECODER ---
     # =============================================================================================================================
 
-    # tqdm.write("\n--- INIZIO FASE 1: TRAINING DEL DECODER (ENCODER CONGELATO) ---")
-    # for param in model.encoder.parameters(): 
-    #     param.requires_grad = False
-    # model.segmentation_head.dropout.p = 0.0 
-    # optimizer = optim.AdamW(list(model.decoder.parameters()) + list(model.segmentation_head.parameters()), lr=config["LR_HEAD"], weight_decay=config["WEIGHT_DECAY"])
-    # scheduler = torch.optim.lr_scheduler.OneCycleLR(
-    #     optimizer, max_lr=1e-3, steps_per_epoch=len(train_loader),
-    #     epochs=config["UNFREEZE_EPOCHS"], pct_start=0.1, div_factor=10, final_div_factor=1e3
-    # )
+    tqdm.write("\n--- INIZIO FASE 1: TRAINING DEL DECODER (ENCODER CONGELATO) ---")
+    for param in model.encoder.parameters(): 
+        param.requires_grad = False
+    model.segmentation_head.dropout.p = 0.0 
+    optimizer = optim.AdamW(list(model.decoder.parameters()) + list(model.segmentation_head.parameters()), lr=config["LR_HEAD"], weight_decay=config["WEIGHT_DECAY"])
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer, max_lr=1e-3, steps_per_epoch=len(train_loader),
+        epochs=config["UNFREEZE_EPOCHS"], pct_start=0.1, div_factor=10, final_div_factor=1e3
+    )
 
-    # for epoch in range(config["FREEZE_EPOCHS"]):
-    #     global_epoch += 1; tqdm.write(f"\n--- Fase 1 / Epoch {epoch+1}/{config['FREEZE_EPOCHS']} (Global: {global_epoch}) ---")
-    #     train_loss = train_one_epoch(
-    #         model=model, loader=train_loader, optimizer=optimizer, scheduler=scheduler, loss_function=combined_loss, 
-    #         scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["FREEZE_EPOCHS"]
-    #     )
-    #     val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config)
-    #     # scheduler.step(val_miou)
-    #     tqdm.write(f"Risultati Epoch {global_epoch}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f}")
-    #     if val_miou > best_iou:
-    #         best_iou, best_conf_matrix = val_miou, val_conf_matrix
-    #         torch.save({'model_state_dict': model.state_dict(), 'config': config}, config["MODEL_SAVE_PATH"])
-    #         tqdm.write(f"\n>>> 🎉 Nuovo modello migliore salvato! mIoU: {best_iou:.4f} <<<")
+    for epoch in range(config["FREEZE_EPOCHS"]):
+        global_epoch += 1; tqdm.write(f"\n--- Fase 1 / Epoch {epoch+1}/{config['FREEZE_EPOCHS']} (Global: {global_epoch}) ---")
+        train_loss = train_one_epoch(
+            model=model, loader=train_loader, optimizer=optimizer, scheduler=scheduler, loss_function=combined_loss, 
+            scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["FREEZE_EPOCHS"]
+        )
+        val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config)
+        # scheduler.step(val_miou)
+        tqdm.write(f"Risultati Epoch {global_epoch}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f}")
+        if val_miou > best_iou:
+            best_iou, best_conf_matrix = val_miou, val_conf_matrix
+            torch.save({'model_state_dict': model.state_dict(), 'config': config}, config["MODEL_SAVE_PATH"])
+            tqdm.write(f"\n>>> 🎉 Nuovo modello migliore salvato! mIoU: {best_iou:.4f} <<<")
 
     # =============================================================================================================================
     # --- FASE 2: UNFREEZE ALL, FINE-TUNE ---
     # =============================================================================================================================
 
-    # tqdm.write("\n--- INIZIO FASE 2: FINE-TUNING DELL'INTERA RETE (ENCODER SCONGELATO) ---")
-    # model.segmentation_head.dropout.p = 0.20
-    # train_loader.dataset.transform = get_train_transforms_kornia_crop(config, aggressive_p=0.5) 
-    # val_loader.dataset.transform = get_val_transforms_kornia_crop(config) 
+    tqdm.write("\n--- INIZIO FASE 2: FINE-TUNING DELL'INTERA RETE (ENCODER SCONGELATO) ---")
+    model.segmentation_head.dropout.p = 0.20
+    train_loader.dataset.transform = get_train_transforms_kornia_crop(config, aggressive_p=0.5) 
+    val_loader.dataset.transform = get_val_transforms_kornia_crop(config) 
 
-    # for param in model.encoder.parameters(): param.requires_grad = True
-    # optimizer = optim.AdamW(model.parameters(), lr=config["LR_FULL"]) #, weight_decay=config["WEIGHT_DECAY"])
-    # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5, cooldown=1, min_lr=1e-7)
+    for param in model.encoder.parameters(): param.requires_grad = True
+    optimizer = optim.AdamW(model.parameters(), lr=config["LR_FULL"]) #, weight_decay=config["WEIGHT_DECAY"])
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5, cooldown=1, min_lr=1e-7)
 
-    ##########################################################
+    # #########################################################
     # LOSS pixel_contrast     
     # def combined_loss(pred, target, feats=None):
     #     if feats is not None:
@@ -925,24 +925,24 @@ def main():
     #     else:
     #         # Evaluation
     #         return 0.8 * criterion_ft(pred, target) + 0.2 * criterion_wce(pred, target)
-    ##########################################################
+    # #########################################################
 
-    # for epoch in range(config["UNFREEZE_EPOCHS"]):
-    #     global_epoch += 1; tqdm.write(f"\n--- Fase 2 / Epoch {epoch+1}/{config['UNFREEZE_EPOCHS']} (Global: {global_epoch}) ---")
+    for epoch in range(config["UNFREEZE_EPOCHS"]):
+        global_epoch += 1; tqdm.write(f"\n--- Fase 2 / Epoch {epoch+1}/{config['UNFREEZE_EPOCHS']} (Global: {global_epoch}) ---")
         
-    #     train_loss = train_one_epoch(
-    #         model=model, loader=train_loader, optimizer=optimizer, scheduler=None, loss_function=combined_loss, 
-    #         scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["UNFREEZE_EPOCHS"]
-    #     )
-    #     val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config)
-    #     scheduler.step(val_miou)
-    #     tqdm.write(f"Risultati Epoch {global_epoch}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f}")
-    #     for i, iou in enumerate(val_iou_per_class):
-    #         if i != config["IGNORE_INDEX"]: tqdm.write(f"    - Classe {i} ({config['CLASS_NAMES'][i]}): {iou:.4f}")
-    #     if val_miou > best_iou:
-    #         best_iou, best_conf_matrix = val_miou, val_conf_matrix
-    #         torch.save({'model_state_dict': model.state_dict(), 'config': config}, config["MODEL_SAVE_PATH"])
-    #         tqdm.write(f"\n>>> 🎉 Nuovo modello migliore salvato! mIoU: {best_iou:.4f} <<<")
+        train_loss = train_one_epoch(
+            model=model, loader=train_loader, optimizer=optimizer, scheduler=None, loss_function=combined_loss, 
+            scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["UNFREEZE_EPOCHS"]
+        )
+        val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config)
+        scheduler.step(val_miou)
+        tqdm.write(f"Risultati Epoch {global_epoch}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f}")
+        for i, iou in enumerate(val_iou_per_class):
+            if i != config["IGNORE_INDEX"]: tqdm.write(f"    - Classe {i} ({config['CLASS_NAMES'][i]}): {iou:.4f}")
+        if val_miou > best_iou:
+            best_iou, best_conf_matrix = val_miou, val_conf_matrix
+            torch.save({'model_state_dict': model.state_dict(), 'config': config}, config["MODEL_SAVE_PATH"])
+            tqdm.write(f"\n>>> 🎉 Nuovo modello migliore salvato! mIoU: {best_iou:.4f} <<<")
 
     
     # =============================================================================================================================
@@ -995,7 +995,7 @@ def main():
             model=model, loader=train_loader, optimizer=fine_tune_optimizer, scheduler=None, loss_function=combined_loss, 
             scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["FINE_TUNING_EPOCHS"]
         )
-        val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config)
+        val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config, current_epoch=epoch)
         scheduler.step(val_miou)
         tqdm.write(f"Risultati Epoch {global_epoch}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f}")
         for i, iou in enumerate(val_iou_per_class):
