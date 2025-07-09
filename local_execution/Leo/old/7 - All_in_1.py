@@ -73,7 +73,7 @@ def get_config() -> Dict[str, Any]:
     config = {
         "DEVICE": torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
         "RANDOM_SEED": 42, "NUM_WORKERS_TRAIN": 5, "NUM_WORKERS_VAL": 2, "USE_AMP": True,
-        "PERSISTENT_WORKERS": True, "RARE_CLASS_INDICES": [4, 6], "RARE_BOOST_FACTOR": 35.0,
+        "PERSISTENT_WORKERS": True, "RARE_CLASS_INDICES": [4, 6], "RARE_BOOST_FACTOR": 50.0,
         
         "DATASET_PATH_TRAIN": os.path.join(base_path, "dataset/training/train"),
         "DATASET_PATH_AUG": os.path.join(base_path, "dataset/training/augmented"),
@@ -575,11 +575,11 @@ def plot_confusion_matrix(conf_matrix_np, class_names, ignore_index, save_path="
     plt.savefig(save_path, dpi=300, bbox_inches='tight'); plt.close(fig)
     tqdm.write(f"Matrice di confusione salvata in '{save_path}'")
 
-def train_one_epoch(model, loader, optimizer, scheduler, loss_function, scaler, device, use_amp, current_epoch, total_epochs, ignore_index=None, requires_feats=False) -> float:
+def train_one_epoch(model, loader, optimizer, scheduler, loss_function, scaler, device, use_amp, current_epoch, total_epochs, ignore_index=None, requires_feats=False, cut_mix=False) -> float:
     model.train(); running_loss = 0.0; progress_bar = tqdm(loader, desc="Training", leave=False)
     for step, (images, masks) in enumerate(progress_bar):
         # Applica CutMix con una certa probabilità
-        if current_epoch <= total_epochs - 5 and torch.rand(1) < 0.5: # es. 50% di probabilità per batch
+        if cut_mix and current_epoch <= total_epochs - 5 and torch.rand(1) < 0.5: # es. 50% di probabilità per batch
             images, masks = cutmix_batch(images, masks, alpha=1.0)
 
         images, masks = images.to(device), masks.to(device, dtype=torch.long)
