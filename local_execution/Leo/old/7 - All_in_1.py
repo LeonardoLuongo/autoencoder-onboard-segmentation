@@ -820,7 +820,45 @@ def fast_boundary_loss(logits, targets, ignore_index=0, down_k=4, every_n=2):
 
     return loss
 
+def dynamic_penalize_confusion_pytorch(logits: torch.Tensor, targets: torch.Tensor, threshold: float = 0.1, penalty_factor: float = 2.0, ignore_index: int = 0):
+    """
+    Penalizza predizioni sbagliate tra classi frequentemente confuse.
+    La penalità è attivata per classi che, nella mini-batch corrente,
+    sono spesso confuse oltre una soglia.
+    """
+    with torch.no_grad():
+        preds = torch.argmax(logits, dim=1)
+        num_classes = logits.size(1)
+        device = logits.device
 
+        # Flatten tensori e filtra ignore_index
+        flat_preds = preds.view(-1)
+        flat_targets = targets.view(-1)
+        valid_mask = flat_targets != ignore_index
+        flat_preds = flat_preds[valid_mask]
+        flat_targets = flat_targets[valid_mask]
+
+        # Costruisci matrice di confusione batch-wise
+        indices = flat_targets * num_classes + flat_preds
+        conf_vector = torch.bincount(indices, minlength=num_classes ** 2)
+        conf_matrix = conf_vector.reshape(num_classes, num_classes).float()
+
+        # Normalizza per riga (evita divisioni per 0)
+        row_sums = conf_matrix.sum(dim=1, keepdim=True).clamp(min=1e-6)
+        conf_norm = conf_matrix / row_sums
+
+        # Trova coppie confuse: conf_norm[i][j] > threshold, i ≠ j
+        confused_mask = (conf_norm > threshold) & (~torch.eye(num_classes, device=device).bool())
+        confused_pairs = confused_mask.nonzero(as_tuple=False)  # shape: [N, 2]
+
+    # Penalizza solo i pixel delle coppie confuse
+    preds = torch.argmax(logits, dim=1)
+    penalty_mask = torch.zeros_like(targets, dtype=torch.float32)
+
+    for (true_cls, pred_cls) in confused_pairs:
+        penalty_mask += ((targets == true_cls) & (preds == pred_cls)).float()
+
+    return penalty_factor * penalty_mask.mean()
 
 
 # =============================================================================
@@ -866,7 +904,9 @@ def main():
     
 
     def combined_loss(pred, target, feats=None, epoch=None):
-        return 0.8 * criterion_ft(pred, target) + 0.2 * criterion_wce(pred, target)
+        return  0.8 * criterion_ft(pred, target) + \
+                0.2 * criterion_wce(pred, target) + \
+                dynamic_penalize_confusion_pytorch(pred, target, threshold=0.10, penalty_factor=2.0, ignore_index=config["IGNORE_INDEX"])
     
 
     best_iou = -1.0; best_conf_matrix = None; global_epoch = 0
