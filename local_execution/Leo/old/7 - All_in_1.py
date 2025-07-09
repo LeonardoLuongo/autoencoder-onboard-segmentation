@@ -80,8 +80,8 @@ def get_config() -> Dict[str, Any]:
         "DATASET_PATH_AUG_AGGR": os.path.join(base_path, "dataset/training/augmented_aggressive"),
         "MODEL_SAVE_PATH": os.path.join(base_path, "best_model_b3.pth"),
 
-        "ENCODER": "efficientnet-b5", "ENCODER_WEIGHTS": "imagenet",
-        "PATCH_SIZE": (44, 12), "STRIDE_VAL": (44, 6), "BATCH_SIZE": 100, 
+        "ENCODER": "efficientnet-b4", "ENCODER_WEIGHTS": "imagenet",
+        "PATCH_SIZE": (544, 512), "STRIDE_VAL": (544, 256), "BATCH_SIZE": 3, 
         "NUM_CLASSES": 9, "IGNORE_INDEX": 0, "VALIDATION_SPLIT": 0.2,
 
         "FREEZE_EPOCHS": 7, "UNFREEZE_EPOCHS": 23, "FINE_TUNING_EPOCHS": 10,
@@ -1162,9 +1162,9 @@ def main():
     train_dataset_full = SegmentationDataset(train_dirs, norm_transf, config)
     val_dataset_full   = SegmentationDataset(val_dirs,   norm_transf, config)
 
-    train_loader = DataLoader(train_dataset_full, batch_size=2, shuffle=True,
+    train_loader = DataLoader(train_dataset_full, batch_size=1, shuffle=True,
                             num_workers=2, pin_memory=True)
-    val_loader   = DataLoader(val_dataset_full,   batch_size=2, shuffle=False,
+    val_loader   = DataLoader(val_dataset_full,   batch_size=1, shuffle=False,
                             num_workers=2, pin_memory=True)
 
     full_img_optimizer = optim.AdamW(model.parameters(), lr=5e-6)
