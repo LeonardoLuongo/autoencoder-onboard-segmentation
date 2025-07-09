@@ -77,7 +77,7 @@ def get_config() -> Dict[str, Any]:
         "DATASET_PATH_TRAIN": os.path.join(base_path, "dataset/training/train"),
         "DATASET_PATH_AUG": os.path.join(base_path, "dataset/training/augmented"),
         "DATASET_PATH_AUG_AGGR": os.path.join(base_path, "dataset/training/augmented_aggressive"),
-        "MODEL_SAVE_PATH": os.path.join(base_path, "best_model_b3.pth"),
+        "MODEL_SAVE_PATH": os.path.join(base_path, "best_model_b3_08_07_23_59.pth"),
 
         "ENCODER": "efficientnet-b3", "ENCODER_WEIGHTS": "imagenet",
         "OUTPUT_SIZE": (384, 768), "BATCH_SIZE": 3, 
@@ -87,8 +87,8 @@ def get_config() -> Dict[str, Any]:
         "LR_HEAD": 1e-3, "LR_FULL": 1e-4, "WEIGHT_DECAY": 1e-6,
 
         "CONTRASTIVE_TEMP": 0.1,      # τ dell’InfoNCE
-        "CONTRASTIVE_MAX_SAMPLES": 4096*3,  # pixel da campionare per batch
-        "CONTRASTIVE_W": 1,         # peso della loss rispetto alle loss di segmento
+        "CONTRASTIVE_MAX_SAMPLES": 4096,  # pixel da campionare per batch
+        "CONTRASTIVE_W": 0.5,         # peso della loss rispetto alle loss di segmento
     }
     
     # FIX: Nomi delle classi anonimi come da richiesta
@@ -218,22 +218,6 @@ def get_train_transforms(config: Dict[str, Any], aggressive_p: float = 0.5) -> A
     # mean, std = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225] # image net
     mean, std = config["MEAN"], config["STD"]
     return A.Compose([
-        # A.HorizontalFlip(p=0.5),
-        # A.VerticalFlip(p=aggressive_p/2),
-        # A.RandomRotate90(p=aggressive_p),
-        # A.RandomBrightnessContrast(p=0.7),
-        # A.RandomGamma(p=0.7),
-        # A.ColorJitter(p=0.7),
-        # A.GaussianBlur(blur_limit=(3, 5), p=0.4),
-        # # A.CoarseDropout(
-        # #     max_holes=16, 
-        # #     min_holes=8,
-        # #     max_height=32,
-        # #     min_height=16,
-        # #     max_width=32, 
-        # #     min_width=16,
-        # #     p=0.5
-        # # ),
         A.Resize(height=config["OUTPUT_SIZE"][0], width=config["OUTPUT_SIZE"][1]),
         A.Normalize(mean=mean, std=std),
         ToTensorV2(),
@@ -248,10 +232,6 @@ def get_val_transforms(output_size: Tuple[int, int], mean: float, std: float) ->
     ])
 
 
-
-
-
-
 from kornia.constants import DataKey, Resample
 
 def get_train_transforms_kornia(config, disable=False, aggressive_p=0.5):
@@ -264,7 +244,7 @@ def get_train_transforms_kornia(config, disable=False, aggressive_p=0.5):
 
             data_keys=["input", "mask"],
             extra_args={
-                DataKey.MASK: {          # <-- unica chiave, vale per TUTTI gli op
+                DataKey.MASK: {          
                     "resample": Resample.NEAREST,
                     "align_corners": False,
                 }
@@ -289,7 +269,7 @@ def get_train_transforms_kornia(config, disable=False, aggressive_p=0.5):
 
             data_keys=["input", "mask"],
             extra_args={
-                DataKey.MASK: {          # <-- unica chiave, vale per TUTTI gli op
+                DataKey.MASK: {        
                     "resample": Resample.NEAREST,
                     "align_corners": False,
                 }
@@ -329,9 +309,6 @@ def get_cpu_transforms_kornia(config: Dict[str, Any]) -> torch.nn.Sequential:
     )
 
 
-
-
-# SOSTITUZIONE DEFINITIVA
 class SegmentationDataset(Dataset):
     def __init__(self, sample_dirs: List[str], transform: nn.Module, config: Dict[str, Any]):
         self.sample_dirs = sample_dirs
@@ -350,30 +327,16 @@ class SegmentationDataset(Dataset):
         assert mask_np.dtype == np.uint8, f"Tipo maschera non corretto: {mask_np.dtype}"
         assert mask_np.max() < self.config["NUM_CLASSES"], f"ID classe non valido in {os.path.join(sample_dir, 'labels.png')}"
 
-        # Immagine a tensore (C, H, W), float [0, 1]
         image_tensor = image_to_tensor(image_np).float() / 255.0
-        
-        # Maschera a tensore (H, W), long
         mask_tensor = torch.from_numpy(mask_np.copy()).long()
 
-        # Applica le trasformazioni Kornia.
-        # Input: immagine (C,H,W), maschera (H,W)
-        # Output di Kornia: immagine (1,C,H,W), maschera (1,1,H,W)
         aug_image, aug_mask = self.transform(image_tensor, mask_tensor)
         
-        # --- LA CORREZIONE È QUI ---
-        # Rimuovi la dimensione batch dall'immagine e TUTTE le dimensioni
-        # singleton (batch E canale) dalla maschera.
-        # L'output deve essere (C, H, W) per l'immagine e (H, W) per la maschera.
         return aug_image.squeeze(0), aug_mask.squeeze()
     
 
-
-
 def get_grouped_stratified_split(config: Dict[str, Any]) -> Tuple[List[str], List[str]]:
-    # ... (Codice invariato, già ottimizzato e corretto) ...
     paths = {"original": config["DATASET_PATH_TRAIN"], "augmented": config["DATASET_PATH_AUG"], "aggressive": config["DATASET_PATH_AUG_AGGR"]}
-    # paths = {"original": config["DATASET_PATH_TRAIN"], "augmented": config["DATASET_PATH_AUG"]}
     all_dirs = []
     tqdm.write("Caricamento percorsi dei dataset..."); 
     for key, path in paths.items():
@@ -395,7 +358,6 @@ def get_grouped_stratified_split(config: Dict[str, Any]) -> Tuple[List[str], Lis
                 path1, hash1 = items_in_bucket[i]; path2, hash2 = items_in_bucket[j]
                 if hash1 - hash2 < 5: G.add_edge(path1, path2)
     image_groups = list(nx.connected_components(G)); tqdm.write(f"Trovati {len(image_groups)} gruppi di immagini uniche.")
-    # Per lo split stratificato, non ci basiamo più su nomi semantici ma su indici
     rare_class_indices = config["RARE_CLASS_INDICES"]
     group_labels = []
     for group in tqdm(image_groups, desc="Etichettatura gruppi per lo split"):
@@ -415,27 +377,23 @@ def calculate_class_weights(dataset: Dataset, config: Dict[str, Any]) -> torch.T
         for mask in masks:
             pixel_counts += np.bincount(mask.flatten(), minlength=num_classes)
             
-    # Calcolo dei pesi con Inverse Frequency + Boost per le classi rare
     class_frequencies = pixel_counts / pixel_counts.sum()
     weights = 1.0 / (class_frequencies + 1e-6)
-    weights = weights / weights.mean() # Normalizza i pesi
+    weights = weights / weights.mean()
     
     for idx in config["RARE_CLASS_INDICES"]:
         weights[idx] *= config["RARE_BOOST_FACTOR"]
         
-    weights = np.clip(weights, a_min=None, a_max=30.0)   # clamp prima
+    weights = np.clip(weights, a_min=None, a_max=30.0)
     weights_tensor = torch.tensor(weights, dtype=torch.float).to(config["DEVICE"])
     
     return weights_tensor
 
 
 # =============================================================================
-# 5. MODELLO E FUNZIONI DI TRAINING/VALIDAZIONE (Logica invariata)
+# 5. MODELLO E FUNZIONI DI TRAINING/VALIDAZIONE
 # =============================================================================
-import segmentation_models_pytorch as smp
-import torch.nn as nn
-
-
+import torch.nn.functional as F
 
 class UNetWithDropout(nn.Module):
     def __init__(self,
@@ -445,35 +403,24 @@ class UNetWithDropout(nn.Module):
                  classes: int,
                  dropout_rate: float = 0.2):
         super().__init__()
-        # modello SMP originale
         self.unet = smp.Unet(
             encoder_name=encoder_name,
             encoder_weights=encoder_weights,
             in_channels=in_channels,
             classes=classes
         )
-
-        # --- dropout che useremo sul decoder ---
         self.extra_dropout = nn.Dropout2d(p=dropout_rate)
-
-        # 🔑 esponi i sottocomponenti originali
         self.encoder = self.unet.encoder
         self.decoder = self.unet.decoder
         self.segmentation_head = self.unet.segmentation_head
-
-        # 🔑 aggancia il dropout come attributo della segmentation_head
-        #     (stessa istanza → cambiare .p qui o su segmentation_head.dropout è identico)
         self.segmentation_head.dropout = self.extra_dropout
 
     def forward(self, x):
-        feats = self.encoder(x)        # lista feature maps
-        x = self.decoder(feats)       # decoder
-        x = self.extra_dropout(x)      # regolarizzazione
-        x = self.segmentation_head(x)  # conv finale
+        feats = self.encoder(x)
+        x = self.decoder(feats)
+        x = self.extra_dropout(x)
+        x = self.segmentation_head(x)
         return x
-
-
-
 
 def get_model(config: Dict[str, Any]) -> nn.Module:
     model = UNetWithDropout(
@@ -486,7 +433,6 @@ def get_model(config: Dict[str, Any]) -> nn.Module:
     tqdm.write(f"Creazione del modello: U-Net con encoder '{config['ENCODER']}'")
     tqdm.write(f"Parametri addestrabili: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
     return model
-
 
 def plot_confusion_matrix(conf_matrix_np, class_names, ignore_index, save_path="confusion_matrix_best.png"):
     tqdm.write("Visualizzazione e salvataggio Matrice di Confusione...")
@@ -506,20 +452,16 @@ def plot_confusion_matrix(conf_matrix_np, class_names, ignore_index, save_path="
 def train_one_epoch(model, loader, optimizer, scheduler, loss_function, scaler, device, use_amp, current_epoch, total_epochs, ignore_index=None) -> float:
     model.train(); running_loss = 0.0; progress_bar = tqdm(loader, desc="Training", leave=False)
     for step, (images, masks) in enumerate(progress_bar):
-        # Applica CutMix con una certa probabilità
-        if current_epoch <= total_epochs - 5 and torch.rand(1) < 0.5: # es. 50% di probabilità per batch
+        if current_epoch <= total_epochs - 5 and torch.rand(1) < 0.5:
             images, masks = cutmix_batch(images, masks, alpha=1.0)
-
         images, masks = images.to(device), masks.to(device, dtype=torch.long)
         with autocast(enabled=use_amp, device_type=device.type if use_amp else 'cpu'):
             outputs = model(images); 
             feats = model.encoder(images)[-1]
             loss = loss_function(outputs, masks, feats)
-
         optimizer.zero_grad(); scaler.scale(loss).backward(); scaler.step(optimizer); scaler.update(); 
         if scheduler is not None:
             scheduler.step()
-
         running_loss += loss.item(); progress_bar.set_postfix(loss=f"{loss.item():.4f}")
     return running_loss / len(loader)
 
@@ -529,7 +471,9 @@ def evaluate(model, loader, criterion, device, config) -> Tuple[float, float, np
         for images, masks in tqdm(loader, desc="Validazione", leave=False):
             images, masks = images.to(device), masks.to(device, dtype=torch.long)
             with autocast(enabled=True, device_type=device.type if device.type=='cuda' else 'cpu'):
-                outputs = model(images); loss = criterion(outputs, masks)
+                outputs = model(images); 
+                # Per la validazione, non passiamo 'feats'
+                loss = criterion(outputs, masks, feats=None) 
             total_loss += loss.item(); preds = torch.argmax(outputs, dim=1)
             masks_flat, preds_flat = masks.flatten(), preds.flatten(); valid = masks_flat != config["IGNORE_INDEX"]
             indices = masks_flat[valid] * config["NUM_CLASSES"] + preds_flat[valid]; conf_matrix += torch.bincount(indices, minlength=config["NUM_CLASSES"]**2).reshape(config["NUM_CLASSES"], config["NUM_CLASSES"])
@@ -538,217 +482,159 @@ def evaluate(model, loader, criterion, device, config) -> Tuple[float, float, np
     mean_iou = np.nanmean(iou_per_class[config["IGNORE_INDEX"]+1:]) if config["IGNORE_INDEX"] is not None else np.nanmean(iou_per_class)
     return total_loss / len(loader), mean_iou, iou_per_class, conf_matrix.cpu().numpy()
 
-
 def cutmix_batch(images, masks, alpha=1.0):
-    """
-    Applica CutMix a un batch di immagini e maschere per la segmentazione.
-
-    Args:
-        images (torch.Tensor): Batch di immagini (B, C, H, W).
-        masks (torch.Tensor): Batch di maschere (B, H, W).
-        alpha (float): Parametro della distribuzione Beta per decidere la dimensione del ritaglio.
-
-    Returns:
-        Tuple[torch.Tensor, torch.Tensor]: Il nuovo batch con CutMix applicato.
-    """
     batch_size = images.size(0)
-    
-    # Genera gli indici per mescolare il batch
-    # Es. [0, 1, 2, 3] -> [2, 0, 3, 1]
     indices = torch.randperm(batch_size).to(images.device)
-    
-    # Genera le coordinate del riquadro da tagliare e incollare
-    # lambda decide la dimensione del riquadro
     lam = np.random.beta(alpha, alpha)
-    
-    # Calcola le coordinate (bounding box)
     bbx1, bby1, bbx2, bby2 = rand_bbox(images.size(), lam)
-    
-    # Prendi le immagini e maschere "sorgente" (da cui tagliare)
     images_shuffled = images[indices]
     masks_shuffled = masks[indices]
-    
-    # Crea una copia delle immagini e maschere originali
     new_images = images.clone()
     new_masks = masks.clone()
-    
-    # Incolla il riquadro
     new_images[:, :, bby1:bby2, bbx1:bbx2] = images_shuffled[:, :, bby1:bby2, bbx1:bbx2]
     new_masks[:, bby1:bby2, bbx1:bbx2] = masks_shuffled[:, bby1:bby2, bbx1:bbx2]
-
     return new_images, new_masks
 
 def rand_bbox(size, lam):
-    """Calcola le coordinate di un bounding box casuale."""
-    W = size[2]
-    H = size[3]
+    W, H = size[2], size[3]
     cut_rat = np.sqrt(1. - lam)
-    cut_w = int(W * cut_rat)
-    cut_h = int(H * cut_rat)
-
-    # Coordinate casuali del centro
-    cx = np.random.randint(W)
-    cy = np.random.randint(H)
-
-    bbx1 = np.clip(cx - cut_w // 2, 0, W)
-    bby1 = np.clip(cy - cut_h // 2, 0, H)
-    bbx2 = np.clip(cx + cut_w // 2, 0, W)
-    bby2 = np.clip(cy + cut_h // 2, 0, H)
-
+    cut_w, cut_h = int(W * cut_rat), int(H * cut_rat)
+    cx, cy = np.random.randint(W), np.random.randint(H)
+    bbx1, bby1 = np.clip(cx - cut_w // 2, 0, W), np.clip(cy - cut_h // 2, 0, H)
+    bbx2, bby2 = np.clip(cx + cut_w // 2, 0, W), np.clip(cy + cut_h // 2, 0, H)
     return bbx1, bby1, bbx2, bby2
 
 # =============================================================================
-# 6. PixelContrastiveLoss
+# 6. PixelContrastiveLoss & Altre Loss
 # =============================================================================
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
 class PixelContrastiveLoss(nn.Module):
-    """
-    Supervised Pixel-wise InfoNCE.
-    * Usa tutti i pixel di un batch fino a `max_samples`
-    * Ignora i pixel con label == ignore_index
-    """
-    def __init__(self,
-                 temperature: float = 0.1,
-                 max_samples: int = 4096,
-                 ignore_index: int = 0):
+    def __init__(self, temperature: float = 0.1, max_samples: int = 4096, ignore_index: int = 0):
         super().__init__()
         self.temp = temperature
         self.max_samples = max_samples
         self.ignore_index = ignore_index
 
-    def forward(self,
-                feats: torch.Tensor,   # (B,C,H,W) – logit o feature
-                labels: torch.Tensor   # (B,H,W)   – int64
-                ) -> torch.Tensor:
-
+    def forward(self, feats: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
         B, C, H, W = feats.shape
-        feats = feats.permute(0, 2, 3, 1).reshape(-1, C)      # (N,C)
-        labels = labels.view(-1)                              # (N,)
-
+        feats = feats.permute(0, 2, 3, 1).reshape(-1, C)
+        labels = labels.view(-1)
         valid = labels != self.ignore_index
         feats, labels = feats[valid], labels[valid]
-
-        # Campionamento per tenere sotto controllo la memoria GPU
         if self.max_samples is not None and feats.size(0) > self.max_samples:
             idx = torch.randperm(feats.size(0), device=feats.device)[:self.max_samples]
             feats, labels = feats[idx], labels[idx]
-
-        feats = F.normalize(feats, dim=1)                     # unit-sphere
-        logits = torch.mm(feats, feats.t()) / self.temp       # (N,N)
-
-        # Mask per self-pair e per classe
+        feats = F.normalize(feats, dim=1)
+        logits = torch.mm(feats, feats.t()) / self.temp
         N = logits.size(0)
         self_mask = torch.eye(N, dtype=torch.bool, device=feats.device)
-        class_mask = labels.unsqueeze(0) == labels.unsqueeze(1)   # (N,N)
-
-        # Pos: stessa classe & non self-pair
+        class_mask = labels.unsqueeze(0) == labels.unsqueeze(1)
         pos_mask = class_mask & (~self_mask)
         neg_mask = ~class_mask
-
         exp_logits = torch.exp(logits)
-        pos_sum = (exp_logits * pos_mask).sum(1)              # (N,)
+        pos_sum = (exp_logits * pos_mask).sum(1)
         all_sum = (exp_logits * (pos_mask | neg_mask)).sum(1)
-
-        # InfoNCE: –log(∑_pos / ∑_all)
         loss = -(torch.log((pos_sum + 1e-8) / (all_sum + 1e-8))).mean()
         return loss
 
-# =============================================================================
-# FocalTverskyLoss
-# =============================================================================
-
 class FocalTverskyLoss(nn.Module):
-    def __init__(self, alpha=0.8, beta=0.2, gamma=2.0,
-                 class_weights=None, ignore_index=0):
+    def __init__(self, alpha=0.8, beta=0.2, gamma=2.0, class_weights=None, ignore_index=0):
         super().__init__()
         self.alpha, self.beta, self.gamma = alpha, beta, gamma
-        self.cw = class_weights  # tensor (C,) normalizzato
+        self.cw = class_weights
         self.ignore = ignore_index
 
     def forward(self, logits, targets):
         probs = torch.softmax(logits, dim=1)
-        true  = torch.nn.functional.one_hot(
-                    targets, num_classes=logits.size(1)
-                ).permute(0,3,1,2).float()
-
+        true = F.one_hot(targets, num_classes=logits.size(1)).permute(0, 3, 1, 2).float()
         if self.ignore is not None:
             mask = targets != self.ignore
-            probs, true = probs*mask[:,None], true*mask[:,None]
-
-        dims = (0,2,3)
-        TP = (probs*true).sum(dims)
-        FP = (probs*(1-true)).sum(dims)
-        FN = ((1-probs)*true).sum(dims)
-
-        TI = (TP+1e-7) / (TP + self.alpha*FN + self.beta*FP + 1e-7)
-        loss = (1 - TI).pow(self.gamma)  # focalizzazione
-
+            probs, true = probs * mask[:, None], true * mask[:, None]
+        dims = (0, 2, 3)
+        TP = (probs * true).sum(dims)
+        FP = (probs * (1 - true)).sum(dims)
+        FN = ((1 - probs) * true).sum(dims)
+        TI = (TP + 1e-7) / (TP + self.alpha * FN + self.beta * FP + 1e-7)
+        loss = (1 - TI).pow(self.gamma)
         if self.cw is not None:
             loss = loss * self.cw
-
         return loss.mean()
 
-
-# =============================================================================
-# BoundaryLoss
-# =============================================================================
-
-
-import torch, kornia
-from torch import nn
-from kornia.contrib import distance_transform
-
 class BoundaryLoss(nn.Module):
-    def __init__(self, num_classes: int,
-                 ignore_index: int = 0,
-                 alpha: float = 2.0):
+    def __init__(self, ignore_index=0):
         super().__init__()
-        self.C = num_classes
-        self.ignore = ignore_index
-        self.alpha = alpha
+        self.ignore_index = ignore_index
 
-    def forward(self, logits, target):
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        C = logits.shape[1]
+        one_hot_targets = F.one_hot(targets, num_classes=C).permute(0, 3, 1, 2).float()
+        dt_external = distance_transform(1 - one_hot_targets)
         probs = torch.softmax(logits, dim=1)
-        B, _, H, W = probs.shape
-        losses = []
-        for c in range(self.C):
-            if c == self.ignore: continue
-            gt_c = (target == c).float().unsqueeze(1)
-            # distanza SOLO fuori dall’oggetto (come facevi)
-            dt = distance_transform(1.0 - gt_c)
-            dt = dt / (dt.max() + 1e-6)          # [0,1]
-            mask = (dt > 0)                      # banda esterna
-            losses.append(
-                (probs[:, c:c+1] * dt * mask).sum() /
-                (mask.sum() + 1e-6)
-            )
-        return torch.stack(losses).mean()
+        multiplied = probs * dt_external
+        if self.ignore_index is not None:
+            mask = (targets != self.ignore_index).unsqueeze(1).expand_as(multiplied)
+            multiplied = multiplied * mask
+        return multiplied.mean()
 
+def dynamic_penalize_confusion_pytorch(logits: torch.Tensor, targets: torch.Tensor, threshold: float = 0.1, penalty_factor: float = 2.0, ignore_index: int = 0):
+    """
+    Penalizza predizioni sbagliate tra classi frequentemente confuse.
+    La penalità è attivata per classi che, nella mini-batch corrente,
+    sono spesso confuse oltre una soglia.
+    """
+    with torch.no_grad():
+        preds = torch.argmax(logits, dim=1)
+        num_classes = logits.size(1)
+        device = logits.device
+
+        # Flatten tensori e filtra ignore_index
+        flat_preds = preds.view(-1)
+        flat_targets = targets.view(-1)
+        valid_mask = flat_targets != ignore_index
+        flat_preds = flat_preds[valid_mask]
+        flat_targets = flat_targets[valid_mask]
+
+        # Costruisci matrice di confusione batch-wise
+        indices = flat_targets * num_classes + flat_preds
+        conf_vector = torch.bincount(indices, minlength=num_classes ** 2)
+        conf_matrix = conf_vector.reshape(num_classes, num_classes).float()
+
+        # Normalizza per riga (evita divisioni per 0)
+        row_sums = conf_matrix.sum(dim=1, keepdim=True).clamp(min=1e-6)
+        conf_norm = conf_matrix / row_sums
+
+        # Trova coppie confuse: conf_norm[i][j] > threshold, i ≠ j
+        confused_mask = (conf_norm > threshold) & (~torch.eye(num_classes, device=device).bool())
+        confused_pairs = confused_mask.nonzero(as_tuple=False)  # shape: [N, 2]
+
+    # Penalizza solo i pixel delle coppie confuse
+    preds = torch.argmax(logits, dim=1)
+    penalty_mask = torch.zeros_like(targets, dtype=torch.float32)
+
+    for (true_cls, pred_cls) in confused_pairs:
+        penalty_mask += ((targets == true_cls) & (preds == pred_cls)).float()
+
+    return penalty_factor * penalty_mask.mean()
 
 # =============================================================================
-# 6. FUNZIONE PRINCIPALE (CON AUGMENTATION AGGRESSIVA)
+# 7. FUNZIONE PRINCIPALE
 # =============================================================================
 def main():
-    config = get_config(); 
-    cache  = load_or_compute_preprocessing(config)
-
-    # sovrascrivi i campi in config così il resto dello script non cambia
-    config["MEAN"], config["STD"]   = cache["mean"], cache["std"]
-    train_dirs, val_dirs            = cache["train_dirs"], cache["val_dirs"]
-    class_weights                   = cache["class_weights"].to(config["DEVICE"])
-    assert 0.0 <= config["MEAN"].min() and config["MEAN"].max() <= 1.0,  "Mean fuori range 0-1"
-    assert 0.0 <  config["STD"].min()  and config["STD"].max()  <  1.0,  "Std anomala"
+    config = get_config()
+    cache = load_or_compute_preprocessing(config)
+    config["MEAN"], config["STD"] = cache["mean"], cache["std"]
+    train_dirs, val_dirs = cache["train_dirs"], cache["val_dirs"]
+    class_weights = cache["class_weights"].to(config["DEVICE"])
+    assert 0.0 <= config["MEAN"].min() and config["MEAN"].max() <= 1.0, "Mean fuori range 0-1"
+    assert 0.0 < config["STD"].min() and config["STD"].max() < 1.0, "Std anomala"
     
-    
-    seed_everything(config["RANDOM_SEED"]); device = config["DEVICE"]
+    seed_everything(config["RANDOM_SEED"])
+    device = config["DEVICE"]
     use_amp = config["USE_AMP"] and AMP_AVAILABLE and device.type == 'cuda'
-    tqdm.write(f"Device: {device} | Mixed Precision: {use_amp}"); tqdm.write(f"Strategia Finale: {config['ENCODER']} con Augmentation Mirata")
+    tqdm.write(f"Device: {device} | Mixed Precision: {use_amp}")
+    tqdm.write(f"Strategia Finale: {config['ENCODER']} con Augmentation Mirata")
 
-    # Pipeline di augmentation diverse per training e validazione
-    train_transforms = get_train_transforms_kornia(config, aggressive_p=0.03) 
+    train_transforms = get_train_transforms_kornia(config, aggressive_p=0.03)
     val_transforms = get_val_transforms_kornia(config)
     
     train_dataset = SegmentationDataset(train_dirs, train_transforms, config)
@@ -760,97 +646,88 @@ def main():
 
     model = get_model(config).to(device)
     scaler = GradScaler(enabled=use_amp)
-    # Calcola i pesi per la loss sul training set (la funzione va definita sopra)
-    # class_weights = calculate_class_weights(train_dataset, config)
 
-    # criterion_tversky = TverskyLoss(mode='multiclass', alpha=0.7, beta=0.3).to(device)
-    # criterion_ce = nn.CrossEntropyLoss(weight=class_weights, ignore_index=config["IGNORE_INDEX"])
-    # criterion_focal = FocalLoss(mode='multiclass', gamma=2.0).to(device)
-    # criterion_dice = DiceLoss(mode='multiclass', ignore_index=config["IGNORE_INDEX"]).to(device)
-    
     pixel_contrast = PixelContrastiveLoss(
         temperature=config["CONTRASTIVE_TEMP"],
         max_samples=config["CONTRASTIVE_MAX_SAMPLES"],
         ignore_index=config["IGNORE_INDEX"]
     ).to(device)
 
-    # Aggiungiamo la Lovasz
-    # criterion_lovasz = LovaszLoss(mode='multiclass',ignore_index=config["IGNORE_INDEX"]).to(device)
+    criterion_ft = FocalTverskyLoss(
+        alpha=0.9, beta=0.1, gamma=3.0,
+        class_weights=None,
+        ignore_index=config["IGNORE_INDEX"]
+    ).to(device)
 
-    criterion_ft  = FocalTverskyLoss(
-                    alpha=0.9, beta=0.1, gamma=3.0,
-                    class_weights=None,
-                    ignore_index=config["IGNORE_INDEX"]
-                ).to(device)
-
-    criterion_wce = nn.CrossEntropyLoss(weight=class_weights,ignore_index=config["IGNORE_INDEX"]).to(device)
+    criterion_wce = nn.CrossEntropyLoss(weight=class_weights, ignore_index=config["IGNORE_INDEX"]).to(device)
     
-
-    def combined_loss(pred, target, feats=None):
+    # Loss per fase 1 (senza PixelContrast)9
+    def phase1_loss(pred, target, feats=None): # feats ignorato
         return 0.8 * criterion_ft(pred, target) + 0.2 * criterion_wce(pred, target)
     
+    best_iou = -1.0
+    best_conf_matrix = None
+    global_epoch = 0
 
-    best_iou = -1.0; best_conf_matrix = None; global_epoch = 0
+    # --- FASE 1: FREEZE ENCODER, TRAIN DECODER ---
+    tqdm.write("\n--- INIZIO FASE 1: TRAINING DEL DECODER (ENCODER CONGELATO) ---")
+    for param in model.encoder.parameters(): 
+        param.requires_grad = False
+    model.segmentation_head.dropout.p = 0.0 
+    optimizer = optim.AdamW(list(model.decoder.parameters()) + list(model.segmentation_head.parameters()), lr=config["LR_HEAD"], weight_decay=config["WEIGHT_DECAY"])
+    scheduler_onecycle = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer, max_lr=config["LR_HEAD"], steps_per_epoch=len(train_loader),
+        epochs=config["FREEZE_EPOCHS"], pct_start=0.1, div_factor=10, final_div_factor=1e3
+    )
 
-    # # --- FASE 1: FREEZE ENCODER, TRAIN DECODER ---
-    # tqdm.write("\n--- INIZIO FASE 1: TRAINING DEL DECODER (ENCODER CONGELATO) ---")
-    # for param in model.encoder.parameters(): 
-    #     param.requires_grad = False
-    # model.segmentation_head.dropout.p = 0.0 
-    # optimizer = optim.AdamW(list(model.decoder.parameters()) + list(model.segmentation_head.parameters()), lr=config["LR_HEAD"], weight_decay=config["WEIGHT_DECAY"])
-    # scheduler = torch.optim.lr_scheduler.OneCycleLR(
-    #     optimizer, max_lr=1e-3, steps_per_epoch=len(train_loader),
-    #     epochs=config["UNFREEZE_EPOCHS"], pct_start=0.1, div_factor=10, final_div_factor=1e3
-    # )
+    for epoch in range(config["FREEZE_EPOCHS"]):
+        global_epoch += 1
+        tqdm.write(f"\n--- Fase 1 / Epoch {epoch+1}/{config['FREEZE_EPOCHS']} (Global: {global_epoch}) ---")
+        train_loss = train_one_epoch(
+            model=model, loader=train_loader, optimizer=optimizer, scheduler=scheduler_onecycle, loss_function=phase1_loss, 
+            scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["FREEZE_EPOCHS"]
+        )
+        val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, phase1_loss, device, config)
+        tqdm.write(f"Risultati Epoch {global_epoch}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f}")
+        if val_miou > best_iou:
+            best_iou, best_conf_matrix = val_miou, val_conf_matrix
+            torch.save({'model_state_dict': model.state_dict(), 'config': config}, config["MODEL_SAVE_PATH"])
+            tqdm.write(f"\n>>> 🎉 Nuovo modello migliore salvato! mIoU: {best_iou:.4f} <<<")
 
-    # for epoch in range(config["FREEZE_EPOCHS"]):
-    #     global_epoch += 1; tqdm.write(f"\n--- Fase 1 / Epoch {epoch+1}/{config['FREEZE_EPOCHS']} (Global: {global_epoch}) ---")
-    #     train_loss = train_one_epoch(
-    #         model=model, loader=train_loader, optimizer=optimizer, scheduler=scheduler, loss_function=combined_loss, 
-    #         scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["FREEZE_EPOCHS"]
-    #     )
-    #     val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config)
-    #     # scheduler.step(val_miou)
-    #     tqdm.write(f"Risultati Epoch {global_epoch}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f}")
-    #     if val_miou > best_iou:
-    #         best_iou, best_conf_matrix = val_miou, val_conf_matrix
-    #         torch.save({'model_state_dict': model.state_dict(), 'config': config}, config["MODEL_SAVE_PATH"])
-    #         tqdm.write(f"\n>>> 🎉 Nuovo modello migliore salvato! mIoU: {best_iou:.4f} <<<")
+    # --- FASE 2: UNFREEZE ALL, FINE-TUNE ---
+    tqdm.write("\n--- INIZIO FASE 2: FINE-TUNING DELL'INTERA RETE (ENCODER SCONGELATO) ---")
+    model.segmentation_head.dropout.p = 0.15
+    train_loader.dataset.transform = get_train_transforms_kornia(config, aggressive_p=0.5) 
 
-    # # # --- FASE 2: UNFREEZE ALL, FINE-TUNE ---
-    # tqdm.write("\n--- INIZIO FASE 2: FINE-TUNING DELL'INTERA RETE (ENCODER SCONGELATO) ---")
-    # model.segmentation_head.dropout.p = 0.15
-    # train_loader.dataset.transform = get_train_transforms_kornia(config, aggressive_p=0.5) 
-
-    for param in model.encoder.parameters(): param.requires_grad = True
-    optimizer = optim.AdamW(model.parameters(), lr=config["LR_FULL"]) #, weight_decay=config["WEIGHT_DECAY"])
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5, cooldown=1, min_lr=1e-7)
-
+    for param in model.encoder.parameters(): 
+        param.requires_grad = True
+    optimizer = optim.AdamW(model.parameters(), lr=config["LR_FULL"])
+    scheduler_plateau = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5, cooldown=1, min_lr=1e-7)
     
-    # LOSS pixel_contrast     
-    def combined_loss(pred, target, feats=None):
-        if feats is not None:
-            # Training con Pixel Contrastive Loss
+    # Funzione di loss per le fasi 2 e 3
+    def contrastive_combined_loss(pred, target, feats=None):
+        base_loss = 0.8 * criterion_ft(pred, target) + \
+            0.2 * criterion_wce(pred, target) + \
+            dynamic_penalize_confusion_pytorch(pred, target, threshold=0.10, penalty_factor=2.0, ignore_index=config["IGNORE_INDEX"])
+    
+        if feats is not None: # In training
             mask_ds = F.interpolate(
                 target.unsqueeze(1).float(),
                 size=feats.shape[2:], mode="nearest"
             ).squeeze(1).long()
-            # return 0.8 * criterion_ft(pred, target) + 0.2 * criterion_wce(pred, target) + 5 * pixel_contrast(feats, mask_ds) * config["CONTRASTIVE_WEIGHT"]
-            return 5 * pixel_contrast(feats, mask_ds) * config["CONTRASTIVE_WEIGHT"]
-        else:
-            # Evaluation
-            return 0.8 * criterion_ft(pred, target) + 0.2 * criterion_wce(pred, target)
-    
-    
+            contrast_loss = pixel_contrast(feats, mask_ds) * config["CONTRASTIVE_W"]
+            return base_loss + contrast_loss 
+        return base_loss # In validazione
+
     for epoch in range(config["UNFREEZE_EPOCHS"]):
-        global_epoch += 1; tqdm.write(f"\n--- Fase 2 / Epoch {epoch+1}/{config['UNFREEZE_EPOCHS']} (Global: {global_epoch}) ---")
-        
+        global_epoch += 1
+        tqdm.write(f"\n--- Fase 2 / Epoch {epoch+1}/{config['UNFREEZE_EPOCHS']} (Global: {global_epoch}) ---")
         train_loss = train_one_epoch(
-            model=model, loader=train_loader, optimizer=optimizer, scheduler=None, loss_function=combined_loss, 
+            model=model, loader=train_loader, optimizer=optimizer, scheduler=None, loss_function=contrastive_combined_loss, 
             scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["UNFREEZE_EPOCHS"]
         )
-        val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config)
-        scheduler.step(val_miou)
+        val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, contrastive_combined_loss, device, config)
+        scheduler_plateau.step(val_miou)
         tqdm.write(f"Risultati Epoch {global_epoch}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f}")
         for i, iou in enumerate(val_iou_per_class):
             if i != config["IGNORE_INDEX"]: tqdm.write(f"    - Classe {i} ({config['CLASS_NAMES'][i]}): {iou:.4f}")
@@ -861,50 +738,55 @@ def main():
 
     
     # --- FASE 3: FINE-TUNING FINALE ---
-    tqdm.write("\n--- INIZIO FASE 3: FINE-TUNING FINALE ---")
-    fine_tune_optimizer = optim.AdamW(model.parameters(), lr=1e-5)
-    model.segmentation_head.dropout.p = 0.0 
-    boundaryLoss = BoundaryLoss(
-        num_classes=config["NUM_CLASSES"],
-        ignore_index=config["IGNORE_INDEX"],
-        alpha=2.0
-    ).to(device)
+    tqdm.write("\n--- INIZIO FASE 3: FINE-TUNING FINALE (CON PIXEL CONTRAST) ---")
+    fine_tune_optimizer = optim.AdamW(model.parameters(), lr=1e-5) # LR più basso per il fine-tuning
+    model.segmentation_head.dropout.p = 0.0 # Rimuovo il dropout per la fase finale
 
-    def combined_loss(pred, target, feats=None):
-        loss_ft = 0.35 * criterion_ft(pred, target) 
-        loss_lov = 0.55 * lovasz_softmax(F.softmax(pred, dim=1), target, ignore=config["IGNORE_INDEX"]) 
-        lambda_bound = 20.0
-        loss_bound = lambda_bound * boundaryLoss(pred, target)
-
-        return loss_ft + loss_lov + loss_bound
     
-    
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(fine_tune_optimizer, 'max', patience=3, factor=0.5, cooldown=1, min_lr=1e-7)
+    scheduler_plateau_ft = torch.optim.lr_scheduler.ReduceLROnPlateau(fine_tune_optimizer, 'max', patience=3, factor=0.5, cooldown=1, min_lr=1e-7)
 
     for epoch in range(config["FINE_TUNING_EPOCHS"]):
-        global_epoch += 1; tqdm.write(f"\n--- Fase 3 / Epoch {epoch+1}/{config['FINE_TUNING_EPOCHS']} (Global: {global_epoch}) ---")
+        global_epoch += 1
+        tqdm.write(f"\n--- Fase 3 / Epoch {epoch+1}/{config['FINE_TUNING_EPOCHS']} (Global: {global_epoch}) ---")
         
         train_loss = train_one_epoch(
-            model=model, loader=train_loader, optimizer=fine_tune_optimizer, scheduler=None, loss_function=combined_loss, 
-            scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["FINE_TUNING_EPOCHS"]
+            model=model, 
+            loader=train_loader, 
+            optimizer=fine_tune_optimizer, 
+            scheduler=None, # Lo scheduler viene chiamato dopo la validazione
+            loss_function=contrastive_combined_loss, 
+            scaler=scaler, 
+            device=device, 
+            use_amp=use_amp, 
+            current_epoch=epoch, 
+            total_epochs=config["FINE_TUNING_EPOCHS"]
         )
-        val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config)
-        scheduler.step(val_miou)
+        val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(
+            model, 
+            val_loader, 
+            contrastive_combined_loss, 
+            device, 
+            config
+        )
+        scheduler_plateau_ft.step(val_miou) # Step dello scheduler per il fine-tuning
+        
         tqdm.write(f"Risultati Epoch {global_epoch}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f}")
         for i, iou in enumerate(val_iou_per_class):
-            if i != config["IGNORE_INDEX"]: tqdm.write(f"    - Classe {i} ({config['CLASS_NAMES'][i]}): {iou:.4f}")
+            if i != config["IGNORE_INDEX"]: 
+                tqdm.write(f"    - Classe {i} ({config['CLASS_NAMES'][i]}): {iou:.4f}")
         if val_miou > best_iou:
             best_iou, best_conf_matrix = val_miou, val_conf_matrix
             torch.save({'model_state_dict': model.state_dict(), 'config': config}, config["MODEL_SAVE_PATH"])
             tqdm.write(f"\n>>> 🎉 Nuovo modello migliore salvato! mIoU: {best_iou:.4f} <<<")
+    
 
     tqdm.write("\n--- Training Completato ---")
     tqdm.write(f"Miglior mIoU di validazione ottenuto: {best_iou:.4f}")
-    if best_conf_matrix is not None: plot_confusion_matrix(best_conf_matrix, config["CLASS_NAMES"], config["IGNORE_INDEX"])
+    if best_conf_matrix is not None: 
+        plot_confusion_matrix(best_conf_matrix, config["CLASS_NAMES"], config["IGNORE_INDEX"])
 
 # =============================================================================
-# 7. ESECUZIONE
+# 8. ESECUZIONE
 # =============================================================================
 if __name__ == "__main__":
     main()
-

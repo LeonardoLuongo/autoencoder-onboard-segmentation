@@ -23,7 +23,7 @@ warnings.filterwarnings("ignore", category=UserWarning) # Nasconde warning di SM
 # =============================================================================
 # 2. CONFIGURAZIONE
 # =============================================================================
-MODEL_PATH = "./best_model_b3_.pth"
+MODEL_PATH = "./best_model_b3_08_07_21_00.pth"
 TEST_DATA_PATH = "./dataset/testing/test"
 VERBOSE = True
 NUM_IMAGES_TO_SHOW = 3
