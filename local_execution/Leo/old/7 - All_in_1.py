@@ -81,7 +81,7 @@ def get_config() -> Dict[str, Any]:
         "MODEL_SAVE_PATH": os.path.join(base_path, "best_model_b3.pth"),
 
         "ENCODER": "efficientnet-b5", "ENCODER_WEIGHTS": "imagenet",
-        "PATCH_SIZE": (544, 512), "STRIDE_VAL": (544, 256), "BATCH_SIZE": 3, 
+        "PATCH_SIZE": (44, 12), "STRIDE_VAL": (44, 6), "BATCH_SIZE": 100, 
         "NUM_CLASSES": 9, "IGNORE_INDEX": 0, "VALIDATION_SPLIT": 0.2,
 
         "FREEZE_EPOCHS": 7, "UNFREEZE_EPOCHS": 23, "FINE_TUNING_EPOCHS": 10,
@@ -1041,15 +1041,18 @@ def main():
     #         return 0.8 * criterion_ft(pred, target) + 0.2 * criterion_wce(pred, target)
     # #########################################################
 
-    penalty_pairs = [(1, 3), (2, 6)] 
-    criterion_penalty = HardPairPenaltyLoss(penalty_pairs, penalty_factor=2.5).to(device)
+    penalty_pairs = [(1, 3), (2, 6), (7, 6), (2, 7), (6, 7), (7, 8)] 
+    criterion_penalty = HardPairPenaltyLoss(penalty_pairs, penalty_factor=1.5).to(device)
+
+    boundary_loss = ABL(nclass=config["NUM_CLASSES"], ignore_label=config["IGNORE_INDEX"]).to(device)
     def combined_loss(pred, target, feats=None, epoch=None):
-        lam_abl = min(1.0, (epoch / 10.0)) * 20.0 # Rampa per ABL
         lam_penalty = min(1.0, (epoch / 5.0)) # Rampa per la penalità
-        
-        loss_seg = 0.8 * criterion_ft(pred, target) + 0.2 * criterion_wce(pred, target)
-        loss_bnd = boundary_loss(pred, target) # La tua ABL
         loss_hard_pairs = criterion_penalty(pred, target)
+
+        lam_abl = min(1.0, (epoch / 10.0)) * 1.5 # Rampa per ABL
+        loss_bnd = boundary_loss(pred, target)
+
+        loss_seg = 0.8 * criterion_ft(pred, target) + 0.2 * criterion_wce(pred, target)
         
         return loss_seg + lam_abl * loss_bnd + lam_penalty * loss_hard_pairs
 
@@ -1104,13 +1107,15 @@ def main():
     #             loss_bnd)
     #############################################################################
 
-    boundary_loss = ABL(nclass=config["NUM_CLASSES"], ignore_label=config["IGNORE_INDEX"]).to(device)
     def combined_loss(pred, target, feats=None, epoch=None):
-        lam = min(0.5, epoch * 0.1)
-        loss_bnd = lam * boundary_loss(pred, target)
+        
+        lam_abl = 2.0 
+        loss_bnd = lam_abl * boundary_loss(pred, target)
+
         return (0.35 * criterion_ft(pred, target) +
                 0.65 * criterion_lov(pred, target) + 
-                loss_bnd)
+                loss_bnd + \
+                dynamic_penalize_confusion_pytorch(pred, target, threshold=0.10, penalty_factor=2.0, ignore_index=config["IGNORE_INDEX"]))
 
     
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(fine_tune_optimizer, 'max', patience=3, factor=0.5, cooldown=1, min_lr=1e-7)
@@ -1132,9 +1137,6 @@ def main():
             torch.save({'model_state_dict': model.state_dict(), 'config': config}, config["MODEL_SAVE_PATH"])
             tqdm.write(f"\n>>> 🎉 Nuovo modello migliore salvato! mIoU: {best_iou:.4f} <<<")
 
-    tqdm.write("\n--- Training Completato ---")
-    tqdm.write(f"Miglior mIoU di validazione ottenuto: {best_iou:.4f}")
-    if best_conf_matrix is not None: plot_confusion_matrix(best_conf_matrix, config["CLASS_NAMES"], config["IGNORE_INDEX"])
 
 
     # =============================================================================================================================
@@ -1160,6 +1162,15 @@ def main():
 
     full_img_optimizer = optim.AdamW(model.parameters(), lr=5e-6)
     model.segmentation_head.dropout.p = 0.0 
+
+    def combined_loss(pred, target, feats=None, epoch=None):
+        
+        lam_abl = 2.5
+        loss_bnd = lam_abl * boundary_loss(pred, target)
+
+        return (criterion_lov(pred, target) + \
+                loss_bnd + \
+                1.5 * dynamic_penalize_confusion_pytorch(pred, target, threshold=0.10, penalty_factor=2.0, ignore_index=config["IGNORE_INDEX"]))
 
     steps_tot = config["FINAL_TUNING_EPOCHS"] * len(train_loader)
     lr_lambda = lambda it: 0.95 ** (it / steps_tot)       # poly-ish
