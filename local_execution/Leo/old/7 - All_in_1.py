@@ -979,7 +979,7 @@ def main():
 
     boundary_loss = ABL(nclass=config["NUM_CLASSES"], ignore_label=config["IGNORE_INDEX"]).to(device)
     def combined_loss(pred, target, feats=None, epoch=None):
-        lam = min(10, epoch)
+        lam = min(0.5, epoch * 0.1)
         loss_bnd = lam * boundary_loss(pred, target)
         return (0.35 * criterion_ft(pred, target) +
                 0.65 * criterion_lov(pred, target) + 
