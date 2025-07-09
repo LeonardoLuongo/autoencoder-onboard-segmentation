@@ -73,15 +73,15 @@ def get_config() -> Dict[str, Any]:
     config = {
         "DEVICE": torch.device('cuda' if torch.cuda.is_available() else 'cpu'),
         "RANDOM_SEED": 42, "NUM_WORKERS_TRAIN": 5, "NUM_WORKERS_VAL": 2, "USE_AMP": True,
-        "PERSISTENT_WORKERS": True, "RARE_CLASS_INDICES": [4, 6], "RARE_BOOST_FACTOR": 25.0,
+        "PERSISTENT_WORKERS": True, "RARE_CLASS_INDICES": [4, 6], "RARE_BOOST_FACTOR": 35.0,
         
         "DATASET_PATH_TRAIN": os.path.join(base_path, "dataset/training/train"),
         "DATASET_PATH_AUG": os.path.join(base_path, "dataset/training/augmented"),
         "DATASET_PATH_AUG_AGGR": os.path.join(base_path, "dataset/training/augmented_aggressive"),
         "MODEL_SAVE_PATH": os.path.join(base_path, "best_model_b3.pth"),
 
-        "ENCODER": "efficientnet-b5", "ENCODER_WEIGHTS": "imagenet",
-        "PATCH_SIZE": (544, 512), "STRIDE_VAL": (544, 256), "BATCH_SIZE": 3, 
+        "ENCODER": "efficientnet-b4", "ENCODER_WEIGHTS": "imagenet",
+        "PATCH_SIZE": (544, 512), "STRIDE_VAL": (544, 256), "BATCH_SIZE": 4, 
         "NUM_CLASSES": 9, "IGNORE_INDEX": 0, "VALIDATION_SPLIT": 0.2,
 
         "FREEZE_EPOCHS": 7, "UNFREEZE_EPOCHS": 23, "FINE_TUNING_EPOCHS": 10,
@@ -221,6 +221,8 @@ def calculate_mean_std(loader: DataLoader) -> Tuple[np.ndarray, np.ndarray]:
 
 from kornia.constants import DataKey, Resample
 
+
+
 def get_train_transforms_kornia_crop(config, disable=False):
     patch = config["PATCH_SIZE"]
     mean, std = config["MEAN"], config["STD"]
@@ -231,7 +233,7 @@ def get_train_transforms_kornia_crop(config, disable=False):
 
             data_keys=["input", "mask"],
             extra_args={
-                DataKey.MASK: {          # <-- unica chiave, vale per TUTTI gli op
+                DataKey.MASK: {
                     "resample": Resample.NEAREST,
                     "align_corners": False,
                 }
@@ -242,33 +244,33 @@ def get_train_transforms_kornia_crop(config, disable=False):
         return K.AugmentationSequential(
             K.RandomCrop(size=patch, p=1.0),
 
+            # ---------------- luce / colore (range-sensitive, apply first) -------------------
+            K.RandomSolarize(thresholds=(0.9, 1.0), p=0.15),           # colpi di luce
+            K.RandomEqualize(p=0.25),                                  # auto-eq sensor
+
+            # ---------------- luce / colore (less sensitive) -------------------
+            K.RandomBrightness(brightness=(0.8, 1.2), p=0.6),
+            K.ColorJitter(brightness=0.15, contrast=0.15,
+                        saturation=0.12, hue=0.06, p=0.5),
+
             # ---------------- sensore / ottica ----------------
             K.RandomGaussianNoise(mean=0., std=0.02, p=0.35),          # “grana”
             K.RandomMotionBlur(kernel_size=5, angle=15., direction=0.5, p=0.15),
             K.RandomGaussianBlur((3, 5), (0.8, 1.5), p=0.25),          # lieve defocus
-
-            # ---------------- luce / colore -------------------
-            K.RandomBrightness(brightness=(0.8, 1.2), p=0.6),
-            K.ColorJitter(brightness=0.15, contrast=0.15,
-                        saturation=0.12, hue=0.06, p=0.5),
-            K.RandomSolarize(thresholds=(0.9, 1.0), p=0.15),           # colpi di luce
-            K.RandomEqualize(p=0.25),                                  # auto-eq sensor
-
+            
             # ---------------- meteo “povero” -------------------
-            # (senza RandomFog / Shadow, ma proviamo a simulare aria torbida)
-            K.RandomPlasmaBrightness(alpha=(0.05, 0.10), p=0.20),      # foschia leggera
+            K.RandomPlasmaBrightness(intensity=(0.05, 0.10), p=0.20),      # foschia leggera
 
             # ---------------- sporco / pixel dropout ----------
-            K.RandomErasing(scale=(0.01, 0.03), ratio=(0.3, 3.3),
-                            value=mean, p=0.25),
+            K.RandomErasing(p=0.25),
 
-            # ---------- normalizzazione ----------
+            # ---------- normalizzazione (MUST BE LAST) ----------
             K.Normalize(mean=torch.tensor(mean),
                         std=torch.tensor(std)),
 
             data_keys=["input", "mask"],
             extra_args={
-                DataKey.MASK: {          # <-- unica chiave, vale per TUTTI gli op
+                DataKey.MASK: {
                     "resample": Resample.NEAREST,
                     "align_corners": False,
                 }
@@ -286,7 +288,7 @@ def get_train_transforms_kornia_resize(config, disable=False):
 
             data_keys=["input", "mask"],
             extra_args={
-                DataKey.MASK: {          # <-- unica chiave, vale per TUTTI gli op
+                DataKey.MASK: {
                     "resample": Resample.NEAREST,
                     "align_corners": False,
                 }
@@ -297,39 +299,42 @@ def get_train_transforms_kornia_resize(config, disable=False):
         return K.AugmentationSequential(
             K.Resize(patch),
 
+            # ---------------- luce / colore (range-sensitive, apply first) -------------------
+            K.RandomSolarize(thresholds=(0.9, 1.0), p=0.15),           # colpi di luce
+            K.RandomEqualize(p=0.25),                                  # auto-eq sensor
+
+            # ---------------- luce / colore (less sensitive) -------------------
+            K.RandomBrightness(brightness=(0.8, 1.2), p=0.6),
+            K.ColorJitter(brightness=0.15, contrast=0.15,
+                        saturation=0.12, hue=0.06, p=0.5),
+
             # ---------------- sensore / ottica ----------------
             K.RandomGaussianNoise(mean=0., std=0.02, p=0.35),          # “grana”
             K.RandomMotionBlur(kernel_size=5, angle=15., direction=0.5, p=0.15),
             K.RandomGaussianBlur((3, 5), (0.8, 1.5), p=0.25),          # lieve defocus
 
-            # ---------------- luce / colore -------------------
-            K.RandomBrightness(brightness=(0.8, 1.2), p=0.6),
-            K.ColorJitter(brightness=0.15, contrast=0.15,
-                        saturation=0.12, hue=0.06, p=0.5),
-            K.RandomSolarize(thresholds=(0.9, 1.0), p=0.15),           # colpi di luce
-            K.RandomEqualize(p=0.25),                                  # auto-eq sensor
-
             # ---------------- meteo “povero” -------------------
-            # (senza RandomFog / Shadow, ma proviamo a simulare aria torbida)
-            K.RandomPlasmaBrightness(alpha=(0.05, 0.10), p=0.20),      # foschia leggera
+            K.RandomPlasmaBrightness(intensity=(0.05, 0.10), p=0.20),      # foschia leggera
 
             # ---------------- sporco / pixel dropout ----------
-            K.RandomErasing(scale=(0.01, 0.03), ratio=(0.3, 3.3),
-                            value=mean, p=0.25),
+            K.RandomErasing(p=0.25),
 
-            # ---------- normalizzazione ----------
+            # ---------- normalizzazione (MUST BE LAST) ----------
             K.Normalize(mean=torch.tensor(mean),
                         std=torch.tensor(std)),
 
             data_keys=["input", "mask"],
             extra_args={
-                DataKey.MASK: {          # <-- unica chiave, vale per TUTTI gli op
+                DataKey.MASK: {
                     "resample": Resample.NEAREST,
                     "align_corners": False,
                 }
             },
             same_on_batch=False,
         )
+
+
+
 
 def get_val_transforms_kornia_crop(config: Dict[str, Any]) -> torch.nn.Sequential:
     patch = config["PATCH_SIZE"]
@@ -342,6 +347,8 @@ def get_val_transforms_kornia_crop(config: Dict[str, Any]) -> torch.nn.Sequentia
         data_keys=['input', 'mask'],
         extra_args={DataKey.MASK: {"resample": Resample.NEAREST}},
     )
+
+
 
 def get_val_transforms_kornia_resize(config: Dict[str, Any]) -> torch.nn.Sequential:
     patch = config["PATCH_SIZE"]
@@ -1041,6 +1048,7 @@ def main():
     #         return 0.8 * criterion_ft(pred, target) + 0.2 * criterion_wce(pred, target)
     # #########################################################
 
+    boundary_loss = ABL(nclass=config["NUM_CLASSES"], ignore_label=config["IGNORE_INDEX"]).to(device)
     penalty_pairs = [(1, 3), (2, 6)] 
     criterion_penalty = HardPairPenaltyLoss(penalty_pairs, penalty_factor=2.5).to(device)
     def combined_loss(pred, target, feats=None, epoch=None):
@@ -1061,7 +1069,7 @@ def main():
             model=model, loader=train_loader, optimizer=optimizer, scheduler=None, loss_function=combined_loss, 
             scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["UNFREEZE_EPOCHS"]
         )
-        val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config)
+        val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config, current_epoch=epoch)
         scheduler.step(val_miou)
         tqdm.write(f"Risultati Epoch {global_epoch}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f}")
         for i, iou in enumerate(val_iou_per_class):
@@ -1104,7 +1112,7 @@ def main():
     #             loss_bnd)
     #############################################################################
 
-    boundary_loss = ABL(nclass=config["NUM_CLASSES"], ignore_label=config["IGNORE_INDEX"]).to(device)
+    
     def combined_loss(pred, target, feats=None, epoch=None):
         lam = min(0.5, epoch * 0.1)
         loss_bnd = lam * boundary_loss(pred, target)
@@ -1153,9 +1161,9 @@ def main():
     train_dataset_full = SegmentationDataset(train_dirs, norm_transf, config)
     val_dataset_full   = SegmentationDataset(val_dirs,   norm_transf, config)
 
-    train_loader = DataLoader(train_dataset_full, batch_size=1, shuffle=True,
+    train_loader = DataLoader(train_dataset_full, batch_size=2, shuffle=True,
                             num_workers=2, pin_memory=True)
-    val_loader   = DataLoader(val_dataset_full,   batch_size=1, shuffle=False,
+    val_loader   = DataLoader(val_dataset_full,   batch_size=2, shuffle=False,
                             num_workers=2, pin_memory=True)
 
     full_img_optimizer = optim.AdamW(model.parameters(), lr=5e-6)
