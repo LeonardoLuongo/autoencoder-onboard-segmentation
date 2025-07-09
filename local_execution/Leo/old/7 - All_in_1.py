@@ -895,7 +895,7 @@ def main():
             torch.save({'model_state_dict': model.state_dict(), 'config': config}, config["MODEL_SAVE_PATH"])
             tqdm.write(f"\n>>> 🎉 Nuovo modello migliore salvato! mIoU: {best_iou:.4f} <<<")
 
-    # # --- FASE 2: UNFREEZE ALL, FINE-TUNE ---
+    # --- FASE 2: UNFREEZE ALL, FINE-TUNE ---
     tqdm.write("\n--- INIZIO FASE 2: FINE-TUNING DELL'INTERA RETE (ENCODER SCONGELATO) ---")
     model.segmentation_head.dropout.p = 0.20
     train_loader.dataset.transform = get_train_transforms_kornia_crop(config, aggressive_p=0.5) 
@@ -955,12 +955,14 @@ def main():
     hd_loss = HausdorffERLoss(alpha=2.0, k=10, reduction='mean').to(device)
 
     def combined_loss(pred, target, feats=None, epoch=None):
-        probs = torch.softmax(pred, dim=1)                               # (B,C,H,W)
-        gt_1hot = torch.nn.functional.one_hot(target, pred.size(1))      # (B,H,W,C)
-        gt_1hot = gt_1hot.permute(0,3,1,2).float()                       # (B,C,H,W)
+        lam = min(10, epoch)                # same scheduling you had
 
-        lam = min(10, epoch)               # stesso scheduling che usavi
-        loss_bnd = lam * hd_loss(probs, gt_1hot)
+        # Hausdorff expects (B,1,H,W) long labels
+        target_hd = target.unsqueeze(1).long()      # (B,1,H,W)
+
+        # logits are fine (no soft-max needed for this loss)
+        loss_bnd = lam * hd_loss(pred, target_hd)
+
         return (0.35 * criterion_ft(pred, target) +
                 0.65 * criterion_lov(pred, target) + 
                 loss_bnd)
