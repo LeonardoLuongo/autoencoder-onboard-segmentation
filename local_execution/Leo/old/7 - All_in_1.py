@@ -80,7 +80,7 @@ def get_config() -> Dict[str, Any]:
         "DATASET_PATH_AUG_AGGR": os.path.join(base_path, "dataset/training/augmented_aggressive"),
         "MODEL_SAVE_PATH": os.path.join(base_path, "best_model_b3.pth"),
 
-        "ENCODER": "efficientnet-b3", "ENCODER_WEIGHTS": "imagenet",
+        "ENCODER": "efficientnet-b5", "ENCODER_WEIGHTS": "imagenet",
         "PATCH_SIZE": (544, 512), "STRIDE_VAL": (544, 256), "BATCH_SIZE": 3, 
         "NUM_CLASSES": 9, "IGNORE_INDEX": 0, "VALIDATION_SPLIT": 0.2,
 
