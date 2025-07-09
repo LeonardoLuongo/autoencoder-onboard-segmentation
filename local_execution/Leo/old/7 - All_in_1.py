@@ -91,6 +91,8 @@ def get_config() -> Dict[str, Any]:
         "CONTRASTIVE_MAX_SAMPLES": 4096*3,  # pixel da campionare per batch
         "CONTRASTIVE_W": 1,         # peso della loss rispetto alle loss di segmento
 
+        "FINAL_TUNING_EPOCHS":5
+
     }
     
     # FIX: Nomi delle classi anonimi come da richiesta
@@ -219,7 +221,7 @@ def calculate_mean_std(loader: DataLoader) -> Tuple[np.ndarray, np.ndarray]:
 
 from kornia.constants import DataKey, Resample
 
-def get_train_transforms_kornia_crop(config, disable=False, aggressive_p=0.5):
+def get_train_transforms_kornia_crop(config, disable=False):
     patch = config["PATCH_SIZE"]
     mean, std = config["MEAN"], config["STD"]
     if disable:
@@ -240,17 +242,29 @@ def get_train_transforms_kornia_crop(config, disable=False, aggressive_p=0.5):
         return K.AugmentationSequential(
             K.RandomCrop(size=patch, p=1.0),
 
-            # --- augmentations ---
-            K.RandomHorizontalFlip(p=0.5),
-            K.RandomVerticalFlip(p=aggressive_p / 2),
-            K.RandomRotation(degrees=180, p=aggressive_p),
-            K.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.7),
-            K.RandomGaussianBlur(kernel_size=(3, 5), sigma=(0.1, 2.0), p=0.4),
+            # ---------------- sensore / ottica ----------------
+            K.RandomGaussianNoise(mean=0., std=0.02, p=0.35),          # “grana”
+            K.RandomMotionBlur(kernel_size=5, angle=15., direction=0.5, p=0.15),
+            K.RandomGaussianBlur((3, 5), (0.8, 1.5), p=0.25),          # lieve defocus
 
-            K.RandomClahe(p=0.4), 
-            K.RandomGamma(gamma=(0.7, 1.5), p=0.5),
+            # ---------------- luce / colore -------------------
+            K.RandomBrightness(brightness=(0.8, 1.2), p=0.6),
+            K.ColorJitter(brightness=0.15, contrast=0.15,
+                        saturation=0.12, hue=0.06, p=0.5),
+            K.RandomSolarize(thresholds=(0.9, 1.0), p=0.15),           # colpi di luce
+            K.RandomEqualize(p=0.25),                                  # auto-eq sensor
 
-            K.Normalize(mean=torch.tensor(mean), std=torch.tensor(std)),
+            # ---------------- meteo “povero” -------------------
+            # (senza RandomFog / Shadow, ma proviamo a simulare aria torbida)
+            K.RandomPlasmaBrightness(alpha=(0.05, 0.10), p=0.20),      # foschia leggera
+
+            # ---------------- sporco / pixel dropout ----------
+            K.RandomErasing(scale=(0.01, 0.03), ratio=(0.3, 3.3),
+                            value=mean, p=0.25),
+
+            # ---------- normalizzazione ----------
+            K.Normalize(mean=torch.tensor(mean),
+                        std=torch.tensor(std)),
 
             data_keys=["input", "mask"],
             extra_args={
@@ -262,7 +276,7 @@ def get_train_transforms_kornia_crop(config, disable=False, aggressive_p=0.5):
             same_on_batch=False,
         )
 
-def get_train_transforms_kornia_resize(config, disable=False, aggressive_p=0.5):
+def get_train_transforms_kornia_resize(config, disable=False):
     patch = config["PATCH_SIZE"]
     mean, std = config["MEAN"], config["STD"]
     if disable:
@@ -283,17 +297,29 @@ def get_train_transforms_kornia_resize(config, disable=False, aggressive_p=0.5):
         return K.AugmentationSequential(
             K.Resize(patch),
 
-            # --- augmentations ---
-            K.RandomHorizontalFlip(p=0.5),
-            K.RandomVerticalFlip(p=aggressive_p / 2),
-            K.RandomRotation(degrees=180, p=aggressive_p),
-            K.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.7),
-            K.RandomGaussianBlur(kernel_size=(3, 5), sigma=(0.1, 2.0), p=0.4),
+            # ---------------- sensore / ottica ----------------
+            K.RandomGaussianNoise(mean=0., std=0.02, p=0.35),          # “grana”
+            K.RandomMotionBlur(kernel_size=5, angle=15., direction=0.5, p=0.15),
+            K.RandomGaussianBlur((3, 5), (0.8, 1.5), p=0.25),          # lieve defocus
 
-            K.RandomClahe(p=0.4), 
-            K.RandomGamma(gamma=(0.7, 1.5), p=0.5),
+            # ---------------- luce / colore -------------------
+            K.RandomBrightness(brightness=(0.8, 1.2), p=0.6),
+            K.ColorJitter(brightness=0.15, contrast=0.15,
+                        saturation=0.12, hue=0.06, p=0.5),
+            K.RandomSolarize(thresholds=(0.9, 1.0), p=0.15),           # colpi di luce
+            K.RandomEqualize(p=0.25),                                  # auto-eq sensor
 
-            K.Normalize(mean=torch.tensor(mean), std=torch.tensor(std)),
+            # ---------------- meteo “povero” -------------------
+            # (senza RandomFog / Shadow, ma proviamo a simulare aria torbida)
+            K.RandomPlasmaBrightness(alpha=(0.05, 0.10), p=0.20),      # foschia leggera
+
+            # ---------------- sporco / pixel dropout ----------
+            K.RandomErasing(scale=(0.01, 0.03), ratio=(0.3, 3.3),
+                            value=mean, p=0.25),
+
+            # ---------- normalizzazione ----------
+            K.Normalize(mean=torch.tensor(mean),
+                        std=torch.tensor(std)),
 
             data_keys=["input", "mask"],
             extra_args={
@@ -928,7 +954,7 @@ def main():
     tqdm.write(f"Device: {device} | Mixed Precision: {use_amp}"); tqdm.write(f"Strategia Finale: {config['ENCODER']} con Augmentation Mirata")
 
     # Pipeline di augmentation diverse per training e validazione
-    train_transforms = get_train_transforms_kornia_resize(config, aggressive_p=0.01) 
+    train_transforms = get_train_transforms_kornia_resize(config) 
     val_transforms = get_val_transforms_kornia_resize(config)
     
     train_dataset = SegmentationDataset(train_dirs, train_transforms, config)
@@ -991,11 +1017,12 @@ def main():
     # =============================================================================================================================
 
     tqdm.write("\n--- INIZIO FASE 2: FINE-TUNING DELL'INTERA RETE (ENCODER SCONGELATO) ---")
-    model.segmentation_head.dropout.p = 0.20
-    train_loader.dataset.transform = get_train_transforms_kornia_crop(config, aggressive_p=0.5) 
-    val_loader.dataset.transform = get_val_transforms_kornia_crop(config) 
+    # model.segmentation_head.dropout.p = 0.10
+    train_dataset.transform = get_train_transforms_kornia_crop(config)
+    val_dataset.transform = get_val_transforms_kornia_crop(config)
 
-    for param in model.encoder.parameters(): param.requires_grad = True
+    for param in model.encoder.parameters(): 
+        param.requires_grad = True
     optimizer = optim.AdamW(model.parameters(), lr=config["LR_FULL"]) #, weight_decay=config["WEIGHT_DECAY"])
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=3, factor=0.5, cooldown=1, min_lr=1e-7)
 
@@ -1051,8 +1078,8 @@ def main():
     tqdm.write("\n--- INIZIO FASE 3: FINE-TUNING ---")
     fine_tune_optimizer = optim.AdamW(model.parameters(), lr=5e-6)
     model.segmentation_head.dropout.p = 0.0 
-    train_loader.dataset.transform = get_train_transforms_kornia_crop(config, disable=True)
-    val_loader.dataset.transform = get_val_transforms_kornia_crop(config)
+    train_dataset.transform = get_train_transforms_kornia_crop(config, disable=True)
+    val_dataset.transform = get_val_transforms_kornia_crop(config)
 
 
 
