@@ -80,7 +80,7 @@ def get_config() -> Dict[str, Any]:
         "DATASET_PATH_AUG_AGGR": os.path.join(base_path, "dataset/training/augmented_aggressive"),
         "MODEL_SAVE_PATH": os.path.join(base_path, "best_model_b3.pth"),
 
-        "ENCODER": "efficientnet-b3", "ENCODER_WEIGHTS": "imagenet",
+        "ENCODER": "efficientnet-b5", "ENCODER_WEIGHTS": "imagenet",
         "PATCH_SIZE": (544, 512), "STRIDE_VAL": (544, 256), "BATCH_SIZE": 3, 
         "NUM_CLASSES": 9, "IGNORE_INDEX": 0, "VALIDATION_SPLIT": 0.2,
 
@@ -861,6 +861,42 @@ def dynamic_penalize_confusion_pytorch(logits: torch.Tensor, targets: torch.Tens
     return penalty_factor * penalty_mask.mean()
 
 
+class HardPairPenaltyLoss(nn.Module):
+    def __init__(self, penalty_pairs: list, penalty_factor: float = 2.0, ignore_index: int = 0):
+        super().__init__()
+        self.penalty_pairs = penalty_pairs
+        self.factor = penalty_factor
+        self.ignore_index = ignore_index
+        self.ce_loss = nn.CrossEntropyLoss(reduction='none') # Calcoliamo la loss per pixel
+
+    def forward(self, logits, targets):
+        # Calcola la loss standard per ogni pixel
+        pixel_loss = self.ce_loss(logits, targets)
+        
+        # Crea una maschera di penalità a zero
+        penalty_mask = torch.zeros_like(targets, dtype=torch.float32)
+        
+        preds = torch.argmax(logits, dim=1)
+        
+        # Per ogni coppia problematica, aumenta la loss
+        for true_cls, pred_cls in self.penalty_pairs:
+            # Penalizza la confusione A -> B
+            mask_a_b = (targets == true_cls) & (preds == pred_cls)
+            penalty_mask[mask_a_b] = self.factor
+            
+            # Penalizza la confusione B -> A
+            mask_b_a = (targets == pred_cls) & (preds == true_cls)
+            penalty_mask[mask_b_a] = self.factor
+            
+        # Pondera la loss originale con la maschera di penalità
+        # Aggiungiamo 1 per non azzerare la loss originale
+        penalized_loss = pixel_loss * (1 + penalty_mask)
+        
+        # Applica la maschera per l'ignore_index
+        valid_mask = targets != self.ignore_index
+        
+        return penalized_loss[valid_mask].mean()
+
 # =============================================================================
 # 6. FUNZIONE PRINCIPALE (CON AUGMENTATION AGGRESSIVA)
 # =============================================================================
@@ -874,6 +910,17 @@ def main():
     class_weights                   = cache["class_weights"].to(config["DEVICE"])
     assert 0.0 <= config["MEAN"].min() and config["MEAN"].max() <= 1.0,  "Mean fuori range 0-1"
     assert 0.0 <  config["STD"].min()  and config["STD"].max()  <  1.0,  "Std anomala"
+
+    print("\n─── STATISTICHE DATASET ───")
+    print(f"MEAN  (R-G-B): {config['MEAN']}  → min {config['MEAN'].min():.4f}  max {config['MEAN'].max():.4f}")
+    print(f"STD   (R-G-B): {config['STD']}   → min {config['STD'].min():.4f}   max {config['STD'].max():.4f}")
+
+    print(f"\nNumero di sample  • train: {len(train_dirs):>5}  • val: {len(val_dirs):>5}")
+
+    print("\nPesi di classe (Cross-Entropy):")
+    for idx, w in enumerate(class_weights.cpu().numpy()):
+        print(f"  classe {idx:>2}: {w:6.2f}")
+    print("──────────────────────────────────────────────────────────────\n")
     
     
     seed_everything(config["RANDOM_SEED"]); device = config["DEVICE"]
@@ -967,6 +1014,19 @@ def main():
     #         return 0.8 * criterion_ft(pred, target) + 0.2 * criterion_wce(pred, target)
     # #########################################################
 
+    penalty_pairs = [(1, 3), (2, 6)] 
+    criterion_penalty = HardPairPenaltyLoss(penalty_pairs, penalty_factor=2.5).to(device)
+    def combined_loss(pred, target, feats=None, epoch=None):
+        lam_abl = min(1.0, (epoch / 10.0)) * 20.0 # Rampa per ABL
+        lam_penalty = min(1.0, (epoch / 5.0)) # Rampa per la penalità
+        
+        loss_seg = 0.8 * criterion_ft(pred, target) + 0.2 * criterion_wce(pred, target)
+        loss_bnd = boundary_loss(pred, target) # La tua ABL
+        loss_hard_pairs = criterion_penalty(pred, target)
+        
+        return loss_seg + lam_abl * loss_bnd + lam_penalty * loss_hard_pairs
+
+
     for epoch in range(config["UNFREEZE_EPOCHS"]):
         global_epoch += 1; tqdm.write(f"\n--- Fase 2 / Epoch {epoch+1}/{config['UNFREEZE_EPOCHS']} (Global: {global_epoch}) ---")
         
@@ -988,7 +1048,7 @@ def main():
     # =============================================================================================================================
     # --- FASE 3: FINE-TUNING FINALE ---
     # =============================================================================================================================
-    tqdm.write("\n--- INIZIO FASE 3: FINE-TUNING FINALE ---")
+    tqdm.write("\n--- INIZIO FASE 3: FINE-TUNING ---")
     fine_tune_optimizer = optim.AdamW(model.parameters(), lr=5e-6)
     model.segmentation_head.dropout.p = 0.0 
     train_loader.dataset.transform = get_train_transforms_kornia_crop(config, disable=True)
@@ -1036,6 +1096,56 @@ def main():
             scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["FINE_TUNING_EPOCHS"]
         )
         val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config, current_epoch=epoch)
+        scheduler.step(val_miou)
+        tqdm.write(f"Risultati Epoch {global_epoch}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f}")
+        for i, iou in enumerate(val_iou_per_class):
+            if i != config["IGNORE_INDEX"]: tqdm.write(f"    - Classe {i} ({config['CLASS_NAMES'][i]}): {iou:.4f}")
+        if val_miou > best_iou:
+            best_iou, best_conf_matrix = val_miou, val_conf_matrix
+            torch.save({'model_state_dict': model.state_dict(), 'config': config}, config["MODEL_SAVE_PATH"])
+            tqdm.write(f"\n>>> 🎉 Nuovo modello migliore salvato! mIoU: {best_iou:.4f} <<<")
+
+    tqdm.write("\n--- Training Completato ---")
+    tqdm.write(f"Miglior mIoU di validazione ottenuto: {best_iou:.4f}")
+    if best_conf_matrix is not None: plot_confusion_matrix(best_conf_matrix, config["CLASS_NAMES"], config["IGNORE_INDEX"])
+
+
+    # =============================================================================================================================
+    # --- FASE 4: FINE-TUNING FINALE ---
+    # =============================================================================================================================
+    tqdm.write("\n--- INIZIO FASE 4: FULL-IMAGE-TUNING ---")
+    full_patch  = (544, 1024)
+    full_stride = full_patch 
+
+    norm_transf = K.AugmentationSequential(
+        K.Normalize(mean=torch.tensor(config["MEAN"]),
+                    std=torch.tensor(config["STD"])),
+        data_keys=['input', 'mask'],
+        extra_args={DataKey.MASK: {"resample": Resample.NEAREST}},
+    )
+    train_dataset_full = SegmentationDataset(train_dirs, norm_transf, config)
+    val_dataset_full   = SegmentationDataset(val_dirs,   norm_transf, config)
+
+    train_loader = DataLoader(train_dataset_full, batch_size=1, shuffle=True,
+                            num_workers=2, pin_memory=True)
+    val_loader   = DataLoader(val_dataset_full,   batch_size=1, shuffle=False,
+                            num_workers=2, pin_memory=True)
+
+    full_img_optimizer = optim.AdamW(model.parameters(), lr=5e-6)
+    model.segmentation_head.dropout.p = 0.0 
+
+    steps_tot = config["FINAL_TUNING_EPOCHS"] * len(train_loader)
+    lr_lambda = lambda it: 0.95 ** (it / steps_tot)       # poly-ish
+    scheduler  = torch.optim.lr_scheduler.LambdaLR(full_img_optimizer, lr_lambda)
+
+    for epoch in range(config["FINAL_TUNING_EPOCHS"]):
+        global_epoch += 1; tqdm.write(f"\n--- Fase 3 / Epoch {epoch+1}/{config['FINAL_TUNING_EPOCHS']} (Global: {global_epoch}) ---")
+        
+        train_loss = train_one_epoch(
+            model=model, loader=train_loader, optimizer=full_img_optimizer, scheduler=None, loss_function=combined_loss, 
+            scaler=scaler, device=device, use_amp=use_amp, current_epoch=epoch, total_epochs=config["FINAL_TUNING_EPOCHS"]
+        )
+        val_loss, val_miou, val_iou_per_class, val_conf_matrix = evaluate(model, val_loader, combined_loss, device, config, current_epoch=epoch, use_sliding=False)
         scheduler.step(val_miou)
         tqdm.write(f"Risultati Epoch {global_epoch}: Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val mIoU: {val_miou:.4f}")
         for i, iou in enumerate(val_iou_per_class):
