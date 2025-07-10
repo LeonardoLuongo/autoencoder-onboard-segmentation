@@ -1049,14 +1049,14 @@ def main():
     # #########################################################
 
     penalty_pairs = [(1, 3), (2, 6), (7, 6), (2, 7), (6, 7), (7, 8)] 
-    criterion_penalty = HardPairPenaltyLoss(penalty_pairs, penalty_factor=1.5).to(device)
+    criterion_penalty = HardPairPenaltyLoss(penalty_pairs, penalty_factor=1).to(device)
 
     boundary_loss = ABL(nclass=config["NUM_CLASSES"], ignore_label=config["IGNORE_INDEX"]).to(device)
     def combined_loss(pred, target, feats=None, epoch=None):
         lam_penalty = min(1.0, (epoch / 5.0)) # Rampa per la penalità
         loss_hard_pairs = criterion_penalty(pred, target)
 
-        lam_abl = min(1.0, (epoch / 10.0)) * 1.5 # Rampa per ABL
+        lam_abl = min(1.0, (epoch / 10.0)) # Rampa per ABL
         loss_bnd = boundary_loss(pred, target)
 
         loss_seg = 0.8 * criterion_ft(pred, target) + 0.2 * criterion_wce(pred, target)
@@ -1093,12 +1093,6 @@ def main():
 
 
 
-    criterion_lov = LovaszLoss(
-        mode='multiclass',
-        per_image=False,
-        ignore_index=config["IGNORE_INDEX"],
-        from_logits=True
-    ).to(device)
 
     #############################################################################
     # Hausdorff Loss
@@ -1116,7 +1110,7 @@ def main():
 
     def combined_loss(pred, target, feats=None, epoch=None):
         
-        lam_abl = 2.0 
+        lam_abl = 1.0 
         loss_bnd = lam_abl * boundary_loss(pred, target)
 
         return (0.35 * criterion_ft(pred, target) +
@@ -1170,14 +1164,20 @@ def main():
     full_img_optimizer = optim.AdamW(model.parameters(), lr=5e-6)
     model.segmentation_head.dropout.p = 0.0 
 
+    criterion_lov = LovaszLoss(
+        mode='multiclass',
+        per_image=False,
+        ignore_index=config["IGNORE_INDEX"],
+        from_logits=True
+    ).to(device)
     def combined_loss(pred, target, feats=None, epoch=None):
         
-        lam_abl = 2.5
+        lam_abl = 1
         loss_bnd = lam_abl * boundary_loss(pred, target)
 
         return (criterion_lov(pred, target) + \
                 loss_bnd + \
-                1.5 * dynamic_penalize_confusion_pytorch(pred, target, threshold=0.10, penalty_factor=2.0, ignore_index=config["IGNORE_INDEX"]))
+                1.25 * dynamic_penalize_confusion_pytorch(pred, target, threshold=0.10, penalty_factor=2.0, ignore_index=config["IGNORE_INDEX"]))
 
     steps_tot = config["FINAL_TUNING_EPOCHS"] * len(train_loader)
     lr_lambda = lambda it: 0.95 ** (it / steps_tot)       # poly-ish
