@@ -1,0 +1,8 @@
+Start-Service sshd
+# Set-Service -Name sshd -StartupType 'Automatic' # For automatic start on boot
+Write-Host "SSH service started."
+
+# Configure firewall to allow SSH if not already configured
+if (!(Get-NetFirewallRule -Name "OpenSSH-Server-In-TCP" -ErrorAction SilentlyContinue | Select-Object Name, Enabled)) {
+    New-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -DisplayName 'OpenSSH Server (sshd)' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22
+}
