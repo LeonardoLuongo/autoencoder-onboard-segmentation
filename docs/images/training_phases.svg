@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 250" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <rect width="960" height="250" rx="12" fill="#ffffff"/>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/>
+    </marker>
+  </defs>
+  <g font-size="13" fill="#0f172a">
+    <!-- Phase I -->
+    <rect x="20" y="20" width="205" height="210" rx="10" fill="#e0f2fe" stroke="#0284c7" stroke-width="1.5"/>
+    <text x="122" y="48" text-anchor="middle" font-weight="700" font-size="15" fill="#075985">PHASE I</text>
+    <text x="122" y="68" text-anchor="middle" font-weight="600">Decoder only</text>
+    <text x="36" y="98">• 7 epochs</text>
+    <text x="36" y="118">• Encoder frozen</text>
+    <text x="36" y="138">• OneCycleLR, max 1e-3</text>
+    <text x="36" y="158">• Light augmentation</text>
+    <text x="36" y="190" font-size="12" fill="#334155">Focal Tversky</text>
+    <text x="36" y="208" font-size="12" fill="#334155">+ Weighted CE</text>
+
+    <line x1="228" y1="125" x2="250" y2="125" stroke="#64748b" stroke-width="2" marker-end="url(#a)"/>
+
+    <!-- Phase II -->
+    <rect x="255" y="20" width="205" height="210" rx="10" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+    <text x="357" y="48" text-anchor="middle" font-weight="700" font-size="15" fill="#5b21b6">PHASE II</text>
+    <text x="357" y="68" text-anchor="middle" font-weight="600">Full fine-tuning</text>
+    <text x="271" y="98">• 23 epochs</text>
+    <text x="271" y="118">• Encoder unfrozen</text>
+    <text x="271" y="138">• LR 1e-4, plateau on mIoU</text>
+    <text x="271" y="158">• Aggressive augmentation</text>
+    <text x="271" y="190" font-size="12" fill="#334155">+ Boundary Loss</text>
+    <text x="271" y="208" font-size="12" fill="#334155">+ Confusion penalty</text>
+
+    <line x1="463" y1="125" x2="485" y2="125" stroke="#64748b" stroke-width="2" marker-end="url(#a)"/>
+
+    <!-- Phase III -->
+    <rect x="490" y="20" width="205" height="210" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/>
+    <text x="592" y="48" text-anchor="middle" font-weight="700" font-size="15" fill="#92400e">PHASE III</text>
+    <text x="592" y="68" text-anchor="middle" font-weight="600">Targeted fine-tuning</text>
+    <text x="506" y="98">• 10 epochs</text>
+    <text x="506" y="118">• LR down to 1e-6</text>
+    <text x="506" y="138">• No augmentation</text>
+    <text x="506" y="158">• No dropout</text>
+    <text x="506" y="190" font-size="12" fill="#334155">+ Lovász-Softmax</text>
+    <text x="506" y="208" font-size="12" fill="#334155">(direct mIoU surrogate)</text>
+
+    <line x1="698" y1="125" x2="720" y2="125" stroke="#64748b" stroke-width="2" marker-end="url(#a)"/>
+
+    <!-- Phase IV -->
+    <rect x="725" y="20" width="215" height="210" rx="10" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+    <text x="832" y="48" text-anchor="middle" font-weight="700" font-size="15" fill="#166534">PHASE IV</text>
+    <text x="832" y="68" text-anchor="middle" font-weight="600">Full-resolution tuning</text>
+    <text x="741" y="98">• 5 epochs</text>
+    <text x="741" y="118">• LR 5e-6</text>
+    <text x="741" y="138">• Original resolution</text>
+    <text x="741" y="158">• Normalization only</text>
+    <text x="741" y="190" font-size="12" fill="#334155">Lovász + Boundary</text>
+    <text x="741" y="208" font-size="12" fill="#334155">+ Focal Tversky + WCE</text>
+  </g>
+</svg>
