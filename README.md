@@ -21,6 +21,7 @@
 A camera mounted on a vehicle driving through rural environments captures still frames. The goal is to **classify every pixel** into one of **8 semantic classes** (plus a background/ignore label `0`):
 
 
+| | | | |
 |---|---|---|---|
 | ☁️ sky | 🪨 rough trail | 🛤️ smooth trail | 🌱 traversable grass |
 | 🌳 high vegetation | 🌿 non-traversable low vegetation | 💧 puddle | 🚧 obstacle |
